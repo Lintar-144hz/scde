@@ -1,14 +1,19 @@
 # SCDE — Solo Coding Desktop Environment
-## Screenshots
+<h2>Screenshots</h2>
 
-### Desktop
-![SCDE Desktop](screenshot-desktop.png)
+<p align="center">
+  <img src="screenshot-desktop.png" alt="SCDE Desktop" width="48%">
+  <img src="screenshot-menu.png" alt="SCDE Application Menu" width="48%">
+</p>
 
-### Firefox
-![Firefox running on SCDE](screenshot-firefox.png)
+<p align="center">
+  <img src="screenshot-firefox.png" alt="Firefox running on SCDE" width="48%">
+  <img src="screenshot.png" alt="SCDE" width="48%">
+</p>
 
-### Application Menu
-![Application Menu](screenshot-menu.png)
+<p align="center">
+  <img src="screenshot-missing.png" alt="SCDE Missing State" width="60%">
+</p>
 SCDE (version 0.2) is a lightweight window manager / desktop environment written
 from scratch in **C11 + Xlib** and built with a plain **Makefile**. One
 event-driven process: no busy polling, no threads, no daemons, no
