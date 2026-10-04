@@ -1,5 +1,5 @@
 # SCDE — Solo Coding Desktop Environment
-
+https://github.com/Lintar-144hz/scde/blob/main/screenshot-desktop.png
 SCDE (version 0.2) is a lightweight window manager / desktop environment written
 from scratch in **C11 + Xlib** and built with a plain **Makefile**. One
 event-driven process: no busy polling, no threads, no daemons, no
