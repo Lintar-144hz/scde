@@ -1,19 +1,46 @@
 # SCDE — Solo Coding Desktop Environment
-<h2>Screenshots</h2>
+<div align="center">
 
-<p align="center">
-  <img src="screenshot-desktop.png" alt="SCDE Desktop" width="48%">
-  <img src="screenshot-menu.png" alt="SCDE Application Menu" width="48%">
+<h2>SCDE in Action</h2>
+
+<p>
+  A lightweight Linux desktop environment built from the ground up in C.
 </p>
 
-<p align="center">
-  <img src="screenshot-firefox.png" alt="Firefox running on SCDE" width="48%">
-  <img src="screenshot.png" alt="SCDE" width="48%">
-</p>
+<br>
 
-<p align="center">
-  <img src="screenshot-missing.png" alt="SCDE Missing State" width="60%">
-</p>
+<img src="screenshot-desktop.png" alt="SCDE Desktop" width="900">
+
+<br><br>
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="screenshot-menu.png" alt="SCDE Application Menu" width="420">
+      <br>
+      <sub><b>Application Menu</b></sub>
+    </td>
+    <td align="center">
+      <img src="screenshot-firefox.png" alt="Firefox running on SCDE" width="420">
+      <br>
+      <sub><b>Applications</b></sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="screenshot.png" alt="SCDE" width="420">
+      <br>
+      <sub><b>Desktop Environment</b></sub>
+    </td>
+    <td align="center">
+      <img src="screenshot-missing.png" alt="SCDE Fallback State" width="420">
+      <br>
+      <sub><b>Fallback State</b></sub>
+    </td>
+  </tr>
+</table>
+
+</div>
 SCDE (version 0.2) is a lightweight window manager / desktop environment written
 from scratch in **C11 + Xlib** and built with a plain **Makefile**. One
 event-driven process: no busy polling, no threads, no daemons, no
