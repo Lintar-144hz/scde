@@ -1,0 +1,70 @@
+# SCDE sample configuration - copy to ~/.config/scde/config
+# format: key=value   (lines starting with # are comments)
+
+# ---------------------------------------------------------------- layout
+# panel position: top or bottom
+panel=bottom
+panel_height=32
+
+# window frame border and Plasma style title bar
+border_width=1
+title_height=24
+
+# 1 = focus follows mouse, 0 = click to focus
+focus_follows_mouse=1
+
+# ---------------------------------------------------------------- desktop
+# solid colour fallback and the vertical gradient wallpaper
+background=#0e1117
+wallpaper_top=#1b2436
+wallpaper_bottom=#0b0d12
+
+border_focused=#3daee9
+border_unfocused=#23262c
+
+# title bar colours
+title_bg=#2b303a
+title_bg_inactive=#22252c
+title_fg=#eaeef3
+title_fg_inactive=#8b93a1
+title_hover=#39414d
+title_close_hover=#d32f2f
+
+# ---------------------------------------------------------------- panel
+show_clock=1
+clock_format=%H:%M
+# second clock line, needs panel_height >= 30
+clock_date_format=%b %d
+show_tray=1
+show_desktop_btn=1
+
+panel_bg=#171a20
+panel_fg=#c9d1db
+button_active=#2f5f8a
+button_inactive=#24272e
+button_hover=#3a414c
+
+# application menu colours
+menu_bg=#1c1f26
+menu_fg=#d5dae2
+menu_selected=#2d5f8f
+
+# ---------------------------------------------------------------- programs
+# terminal started with Alt+Enter and by the Terminal menu entry
+# (leave empty to auto-detect xterm/urxvt/gnome-terminal/...)
+terminal=xterm
+# browser used by the Web Browser menu entry and for URLs typed into Alt+F2
+# (empty = first of firefox, chromium, ... found in PATH)
+browser=
+
+# image shown on the desktop (feh loads it)
+wallpaper=
+
+# font used by panel, menu and prompt (X core font)
+font=-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*
+
+# application menu entries: menu=Label|command
+# pinned above the .desktop applications scanned from /usr/share/applications
+menu=Terminal|xterm
+menu=Editor|${EDITOR:-vi}
+menu=Files|@files

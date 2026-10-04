@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+build-debug/
+
+# Compiled binaries
+scde
+scde-debug
+hal/libhal.a
+
+# Object files
+*.o
+*.a
+*.so
+
+# Dependency files
+*.d
+
+# Runtime / temporary files
+*.log
+*.tmp
+
+# Editor / OS files
+*~
+.DS_Store
