@@ -581,6 +581,112 @@ else
     bad "detected terminal is launched from the menu"
 fi
 
+# ------------------------------------------------- 17. desktop shortcuts
+log "[17] desktop shortcuts (select, open, context menu, move)"
+kill -TERM "$SCDE_PID" 2>/dev/null
+for i in $(seq 1 50); do kill -0 "$SCDE_PID" 2>/dev/null || break; sleep 0.1; done
+wait "$SCDE_PID" 2>/dev/null
+SCDE_PID=""
+
+# empty the desktop: close every managed window
+for id in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]\+'); do
+    xdotool windowkill $((id)) 2>/dev/null
+done
+sleep 0.4
+
+DESK="$HOME/Desktop"
+mkdir -p "$DESK" "$HOME/.local/share/scde"
+cat > "$DESK/test.desktop" <<ENTRY
+[Desktop Entry]
+Type=Application
+Name=Test Shortcut
+Exec=touch $HOME/desktop_marker
+ENTRY
+# pin the shortcut so its position does not depend on the grid
+printf '400 300 %s/test.desktop\n' "$DESK" > "$HOME/.local/share/scde/desktop.layout"
+rm -f "$HOME/desktop_marker"
+
+"$BIN" >"$WORK/scde7.log" 2>&1 &
+SCDE_PID=$!
+sleep 0.9
+if kill -0 "$SCDE_PID" 2>/dev/null; then
+    ok "starts with a desktop shortcut"
+else
+    bad "starts with a desktop shortcut"; cat "$WORK/scde7.log"
+fi
+
+# the shortcut is painted on the root window at its saved position
+PIX=$("$PIXELBIN" 434 310 2>/dev/null | tr -d '\n')
+if [ "$PIX" = "0x3daee9" ]; then
+    ok "shortcut icon is drawn on the desktop (pixel $PIX)"
+else
+    bad "shortcut icon is drawn on the desktop (got $PIX, want 0x3daee9)"
+fi
+
+# single click selects the icon
+xdotool mousemove 446 338; sleep 0.25
+xdotool click 1; sleep 0.35
+PIX=$("$PIXELBIN" 401 301 2>/dev/null | tr -d '\n')
+if [ "$PIX" != "0x101014" ]; then
+    ok "single click selects the shortcut (pixel $PIX)"
+else
+    bad "single click selects the shortcut (selection not painted)"
+fi
+
+# a click on empty space clears the selection again
+xdotool mousemove 150 500; sleep 0.25
+xdotool click 1; sleep 0.3
+PIX=$("$PIXELBIN" 401 301 2>/dev/null | tr -d '\n')
+if [ "$PIX" = "0x101014" ]; then
+    ok "click on the empty desktop clears the selection"
+else
+    bad "click on the empty desktop clears the selection ($PIX)"
+fi
+
+# double click runs the Exec= line
+xdotool mousemove 446 338; sleep 0.25
+xdotool click --repeat 2 --delay 150 1; sleep 0.7
+if [ -f "$HOME/desktop_marker" ]; then
+    ok "double click runs the shortcut"
+else
+    bad "double click runs the shortcut"
+fi
+
+# right click on the shortcut opens its own menu
+xdotool mousemove 446 338; sleep 0.25
+xdotool click 3; sleep 0.5
+if xdotool search --onlyvisible --name '^scde-menu$' >/dev/null 2>&1; then
+    ok "right click on a shortcut opens a menu"
+else
+    bad "right click on a shortcut opens a menu"
+fi
+xdotool key Escape; sleep 0.3
+
+# right click on empty space -> New Folder (8th entry of the desktop menu)
+xdotool mousemove 150 400; sleep 0.25
+xdotool click 3; sleep 0.5
+xdotool key Down Down Down Down Down Down; sleep 0.2
+xdotool key Return; sleep 0.5
+if [ -d "$DESK/New Folder" ]; then
+    ok "desktop menu creates a new folder"
+else
+    bad "desktop menu creates a new folder"
+fi
+
+# dragging the shortcut rewrites the layout file
+xdotool mousemove 446 338; sleep 0.3
+xdotool mousedown 1; sleep 0.3
+xdotool mousemove 600 400; sleep 0.4
+xdotool mouseup 1; sleep 0.5
+LAY="$HOME/.local/share/scde/desktop.layout"
+LX=$(awk '{print $1}' "$LAY" 2>/dev/null)
+LY=$(awk '{print $2}' "$LAY" 2>/dev/null)
+if [ -n "${LX:-}" ] && [ "${LX:-0}" -gt 400 ] && grep -q "$DESK/test.desktop" "$LAY"; then
+    ok "dragging a shortcut saves its position ($LX $LY)"
+else
+    bad "dragging a shortcut saves its position (${LX:-?} ${LY:-?})"
+fi
+
 # ------------------------------------------------------------- summary
 log ""
 log "== results: $PASS passed, $FAIL failed =="

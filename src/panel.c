@@ -1,7 +1,9 @@
 /*
- * SCDE - panel (Plasma style): launcher, task manager, tray, clock
+ * SCDE - panel (Windows style): Start button, task manager, tray, clock
  */
 #include "scde.h"
+
+#include <scde/security.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +14,7 @@
 #define DESKTOP_W 8
 #define BTN_MAX_W 176
 #define BTN_MIN_W 44
+#define BTN_CLOSE_W 16
 
 typedef struct {
     Client *c;
@@ -25,9 +28,18 @@ static char date_str[128];
 static int hover_launcher;
 static int hover_desktop;
 static int hover_task = -1;
+static int hover_task_close;
 static int hover_tray = -1;
 static int clock_has_seconds;
 static int clock_w, tray_w, desk_w;
+static int tray_draw, clock_draw;
+
+/* 50% blend of two RRGGBB colours - used to dim the label of a minimized
+   window so it reads as "not there" */
+static unsigned long dim_color(unsigned long fg, unsigned long bg)
+{
+    return (((fg & 0xfefefeUL) >> 1) + ((bg & 0xfefefeUL) >> 1));
+}
 
 int panel_reserved(void)
 {
@@ -69,7 +81,7 @@ static void icon_launcher(int y0)
 
     x0 = cx - s - g / 2;
     y0i = cy - s - g / 2;
-    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_fg);
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);   /* accent logo */
     for (i = 0; i < 2; i++)
         for (j = 0; j < 2; j++)
             XFillRectangle(sc.dpy, sc.panel, sc.gc, x0 + i * (s + g),
@@ -125,6 +137,25 @@ static void icon_battery(int x, int cy, unsigned long fg, unsigned long bg)
     XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 5, cy - 4, 8, 7);
     XSetForeground(sc.dpy, sc.gc, fg);
     XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 5, cy - 4, 5, 7);
+}
+
+/* Security Center: a filled shield, accent colour while protection runs */
+static void icon_shield(int x, int cy, unsigned long fg)
+{
+    XPoint p[5];
+
+    p[0].x = x;
+    p[0].y = cy - 7;
+    p[1].x = x + 14;
+    p[1].y = cy - 7;
+    p[2].x = x + 14;
+    p[2].y = cy;
+    p[3].x = x + 7;
+    p[3].y = cy + 8;
+    p[4].x = x;
+    p[4].y = cy;
+    XSetForeground(sc.dpy, sc.gc, fg);
+    XFillPolygon(sc.dpy, sc.panel, sc.gc, p, 5, Convex, CoordModeOrigin);
 }
 
 /* ----------------------------------------------------------------- panel */
@@ -191,8 +222,18 @@ void panel_update(void)
         if (dw > clock_w)
             clock_w = dw;
     }
-    tray_w = cfg.show_tray ? TRAY_ICON_W * 3 : 0;
+    tray_w = cfg.show_tray ? TRAY_ICON_W * 4 : 0;
     desk_w = cfg.show_desktop_btn ? DESKTOP_W : 0;
+
+    /* drop the tray (and then the clock) instead of letting it run into the
+       task buttons on a narrow screen */
+    tray_draw = tray_w > 0 &&
+                sc.sw - clock_w - tray_w - desk_w - 8 - (LAUNCHER_W + 6) >= 8;
+    clock_draw = clock_w > 0 &&
+                 sc.sw - clock_w - (tray_draw ? tray_w : 0) - desk_w - 8 -
+                     (LAUNCHER_W + 6) >= 8;
+    if (!clock_draw)
+        tray_draw = 0;
 
     XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
     XFillRectangle(sc.dpy, sc.panel, sc.gc, 0, 0, (unsigned)sc.panel_w,
@@ -211,7 +252,8 @@ void panel_update(void)
                    (unsigned)(cfg.panel_height - 8));
 
     x = LAUNCHER_W + 6;
-    right = sc.sw - clock_w - tray_w - desk_w - 8;
+    right = sc.sw - (clock_draw ? clock_w : 0) - (tray_draw ? tray_w : 0) -
+            desk_w - 8;
     avail = right - x;
     if (avail < 0)
         avail = 0;
@@ -220,19 +262,28 @@ void panel_update(void)
     for (c = sc.clients; c && n < MAX_PANEL_BTNS; c = c->next)
         n++;
 
-    w = (n > 0 && avail > 0) ? avail / n : BTN_MAX_W;
-    if (w > BTN_MAX_W)
-        w = BTN_MAX_W;
     shown = n;
-    if (n > 0 && w < BTN_MIN_W) {
-        shown = avail / BTN_MIN_W;
-        if (shown < 1)
-            shown = 1;
-        if (shown > n)
-            shown = n;
-        w = avail / shown;
-        if (w > BTN_MAX_W)
-            w = BTN_MAX_W;
+    w = BTN_MAX_W;
+    if (n > 0) {
+        if (avail < 8) {
+            shown = 0;                  /* no room for task buttons at all */
+        } else {
+            w = avail / n;
+            if (w > BTN_MAX_W)
+                w = BTN_MAX_W;
+            if (w < BTN_MIN_W) {
+                shown = avail / BTN_MIN_W;
+                if (shown < 1)
+                    shown = 1;
+                if (shown > n)
+                    shown = n;
+                w = avail / shown;
+                if (w > BTN_MAX_W)
+                    w = BTN_MAX_W;
+                if (w < 8)
+                    shown = 0;
+            }
+        }
     }
 
     nbtns = 0;
@@ -240,6 +291,7 @@ void panel_update(void)
         char label[NAME_MAX_LEN];
         int active = (c == sc.focused);
         unsigned long bg;
+        unsigned long fg;
         int bl;
 
         if (x + 2 >= right)
@@ -249,23 +301,69 @@ void panel_update(void)
         btns[nbtns].w = w;
         nbtns++;
 
-        bg = active ? cfg.col_btn_active : cfg.col_btn_inactive;
-        XSetForeground(sc.dpy, sc.gc, bg);
-        XFillRectangle(sc.dpy, sc.panel, sc.gc, x, y0 + 4, (unsigned)(w - 4),
-                       (unsigned)(cfg.panel_height - 8));
-        if (active) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-            XFillRectangle(sc.dpy, sc.panel, sc.gc, x, y0 + 4, (unsigned)(w - 4),
-                           2);
+        /* Windows style: transparent until hovered, a thin underline for
+           every running window and the accent bar for the focused one */
+        bg = 0;
+        if (active)
+            bg = cfg.col_btn_active;
+        else if (i == hover_task)
+            bg = cfg.col_btn_hover;
+        if (bg) {
+            XSetForeground(sc.dpy, sc.gc, bg);
+            XFillRectangle(sc.dpy, sc.panel, sc.gc, x, y0 + 2,
+                           (unsigned)(w - 4),
+                           (unsigned)(cfg.panel_height - 4));
         }
+        XSetForeground(sc.dpy, sc.gc,
+                       active ? cfg.col_border_focus
+                              : dim_color(cfg.col_panel_fg, cfg.col_panel_bg));
+        XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 2,
+                       y0 + cfg.panel_height - 3, (unsigned)(w - 8), 3);
 
         bl = baseline(y0);
-        fit_text(label, sizeof(label), c->name, w - 18);
-        draw_text(sc.panel, x + 8, bl,
-                  active ? 0xffffffUL : cfg.col_panel_fg, label);
-        if (c->minimized) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_panel_fg);
-            XDrawRectangle(sc.dpy, sc.panel, sc.gc, x + 2, y0 + 6, 4, 4);
+        if (active)
+            fg = 0xffffffUL;
+        else if (c->minimized)
+            fg = dim_color(cfg.col_panel_fg, bg ? bg : cfg.col_panel_bg);
+        else
+            fg = cfg.col_panel_fg;
+
+        /* mini application icon left of the label */
+        draw_win_glyph(sc.panel, x + 6, y0 + (cfg.panel_height - 14) / 2, 14,
+                       fg, bg ? bg : cfg.col_panel_bg);
+        {
+            int bi = nbtns - 1;
+            int has_close = w >= 64;
+            int room = w - 34 - (has_close ? BTN_CLOSE_W : 0);
+
+            label[0] = '\0';
+            if (room > 0)
+                fit_text(label, sizeof(label), c->name, room);
+            draw_text(sc.panel, x + 26, bl, fg, label);
+
+            /* close (X) at the right end of a wide enough task button */
+            if (has_close) {
+                int zx = x + w - 4 - BTN_CLOSE_W;
+                int zy = y0 + 4;
+                int zh = cfg.panel_height - 8;
+                int on = bi == hover_task && hover_task_close;
+
+                if (on) {
+                    XSetForeground(sc.dpy, sc.gc, cfg.col_close_hover);
+                    XFillRectangle(sc.dpy, sc.panel, sc.gc, zx, zy,
+                                   (unsigned)BTN_CLOSE_W, (unsigned)zh);
+                }
+                XSetForeground(sc.dpy, sc.gc, on ? 0xffffffUL : fg);
+                {
+                    int cx = zx + BTN_CLOSE_W / 2;
+                    int cy = zy + zh / 2;
+
+                    XDrawLine(sc.dpy, sc.panel, sc.gc, cx - 4, cy - 4,
+                              cx + 4, cy + 4);
+                    XDrawLine(sc.dpy, sc.panel, sc.gc, cx - 4, cy + 4,
+                              cx + 4, cy - 4);
+                }
+            }
         }
         x += w;
     }
@@ -280,7 +378,7 @@ void panel_update(void)
         if (clock_x0 < x + 8)
             clock_x0 = x + 8;
 
-        if (cfg.show_tray) {
+        if (tray_draw) {
             int tx = clock_x0 - tray_w;
             if (tx < x + 8)
                 tx = x + 8;
@@ -308,9 +406,20 @@ void panel_update(void)
                                (unsigned)(cfg.panel_height - 8));
             }
             icon_battery(tx + 5, cy, cfg.col_panel_fg, cfg.col_btn_inactive);
+            tx += TRAY_ICON_W;
+            if (hover_tray == 3) {
+                XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
+                XFillRectangle(sc.dpy, sc.panel, sc.gc, tx, y0 + 4,
+                               (unsigned)TRAY_ICON_W,
+                               (unsigned)(cfg.panel_height - 8));
+            }
+            icon_shield(tx + 4, cy,
+                        scde_security_get_scan_mode() == SCDE_SCAN_OFF
+                            ? dim_color(cfg.col_panel_fg, cfg.col_panel_bg)
+                            : cfg.col_border_focus);
         }
 
-        if (cfg.show_clock && clock_str[0]) {
+        if (clock_draw && clock_str[0]) {
             int cx;
 
             if (two_line_clock() && date_str[0]) {
@@ -373,9 +482,27 @@ int panel_button_press(XButtonEvent *ev)
 
     for (i = 0; i < nbtns; i++) {
         if (ev->x >= btns[i].x && ev->x < btns[i].x + btns[i].w) {
+            if (btns[i].w >= 64) {
+                int zx = btns[i].x + btns[i].w - 4 - BTN_CLOSE_W;
+
+                if (ev->x >= zx && ev->x < zx + BTN_CLOSE_W) {
+                    close_client(btns[i].c);
+                    return 1;
+                }
+            }
             if (btns[i].c->minimized)
                 client_minimize(btns[i].c, 0);
             focus_client(btns[i].c);
+            return 1;
+        }
+    }
+
+    if (tray_draw) {
+        int tx = sc.sw - desk_w - clock_w - tray_w;
+
+        if (ev->x >= tx && ev->x < tx + tray_w) {
+            if ((ev->x - tx) / TRAY_ICON_W == 3)
+                security_gui_toggle();          /* shield: Security Center */
             return 1;
         }
     }
@@ -394,6 +521,7 @@ void panel_motion(XMotionEvent *ev)
     int lch = (ev->x < LAUNCHER_W);
     int dch = 0;
     int tch = -1;
+    int tcc = 0;
 
     for (i = 0; i < nbtns; i++) {
         if (ev->x >= btns[i].x && ev->x < btns[i].x + btns[i].w) {
@@ -401,11 +529,16 @@ void panel_motion(XMotionEvent *ev)
             break;
         }
     }
+    if (found >= 0 && btns[found].w >= 64) {
+        int zx = btns[found].x + btns[found].w - 4 - BTN_CLOSE_W;
+
+        tcc = ev->x >= zx && ev->x < zx + BTN_CLOSE_W;
+    }
     if (cfg.show_desktop_btn && ev->x >= sc.sw - desk_w)
         dch = 1;
-    if (cfg.show_tray) {
+    if (tray_draw) {
         int tx = sc.sw - desk_w - clock_w - tray_w;
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < 4; i++) {
             if (ev->x >= tx + i * TRAY_ICON_W &&
                 ev->x < tx + (i + 1) * TRAY_ICON_W)
                 tch = i;
@@ -413,11 +546,12 @@ void panel_motion(XMotionEvent *ev)
     }
 
     if (lch != hover_launcher || dch != hover_desktop || tch != hover_tray ||
-        found != hover_task) {
+        found != hover_task || tcc != hover_task_close) {
         hover_launcher = lch;
         hover_desktop = dch;
         hover_tray = tch;
         hover_task = found;
+        hover_task_close = tcc;
         panel_update();
     }
 }

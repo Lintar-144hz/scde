@@ -6,8 +6,9 @@
 panel=bottom
 panel_height=32
 
-# window frame border and Plasma style title bar
-border_width=1
+# window frame border and Windows style title bar
+# border_width 3 makes the edge resize grip usable
+border_width=3
 title_height=24
 
 # 1 = focus follows mouse, 0 = click to focus
@@ -19,16 +20,20 @@ background=#0e1117
 wallpaper_top=#1b2436
 wallpaper_bottom=#0b0d12
 
-border_focused=#3daee9
-border_unfocused=#23262c
+# accent colour: active window border, task bar underline, Start logo
+border_focused=#0078d7
+border_unfocused=#3b3b3b
 
-# title bar colours
-title_bg=#2b303a
-title_bg_inactive=#22252c
-title_fg=#eaeef3
-title_fg_inactive=#8b93a1
-title_hover=#39414d
-title_close_hover=#d32f2f
+# title bar colours (Windows dark theme)
+title_bg=#2b2b2b
+title_bg_inactive=#202020
+title_fg=#ffffff
+title_fg_inactive=#9a9a9a
+title_hover=#3d3d3d
+title_close_hover=#e81123
+
+# installed applications shown as icons on the desktop (right half)
+desktop_apps=1
 
 # ---------------------------------------------------------------- panel
 show_clock=1
@@ -38,16 +43,16 @@ clock_date_format=%b %d
 show_tray=1
 show_desktop_btn=1
 
-panel_bg=#171a20
-panel_fg=#c9d1db
-button_active=#2f5f8a
-button_inactive=#24272e
-button_hover=#3a414c
+panel_bg=#1f1f1f
+panel_fg=#ffffff
+button_active=#4d4d4d
+button_inactive=#333333
+button_hover=#454545
 
 # application menu colours
-menu_bg=#1c1f26
-menu_fg=#d5dae2
-menu_selected=#2d5f8f
+menu_bg=#2b2b2b
+menu_fg=#ffffff
+menu_selected=#0078d7
 
 # ---------------------------------------------------------------- programs
 # terminal started with Alt+Enter and by the Terminal menu entry

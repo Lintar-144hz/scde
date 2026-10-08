@@ -3,6 +3,8 @@
  */
 #include "scde.h"
 
+#include <scde/security.h>
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +12,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
+
+/* internal: subject of the most recent security exec gate (core.c) */
+const char *scde__last_exec_subject(void);
 
 void log_msg(const char *fmt, ...)
 {
@@ -35,21 +40,73 @@ void die(const char *fmt, ...)
 /*
  * Run a command through /bin/sh in its own session.  The X connection fd and
  * the instance lock fd are closed in the child so it never inherits them.
+ *
+ * Every command first passes the SCDE security policy gate (resolve ->
+ * scan -> trust -> decide, fail-closed).  DENY is refused here and audited.
+ * RESTRICT/SANDBOX children apply their restrictions before exec and
+ * acknowledge them over a CLOEXEC pipe; without a verified ack the parent
+ * never lets the run continue silently - denied runs are audited too.
  */
 void spawn(const char *cmd)
 {
     pid_t pid;
+    scde_decision_t dec = SCDE_DECIDE_DENY;
+    int pfd[2] = { -1, -1 };
+    const char *subject;
 
     if (!cmd || !*cmd)
         return;
 
+    /* policy gate: logs DENY / POLICY_FALLBACK / FEATURE_UNAVAILABLE */
+    if (scde_security_gate_exec(cmd, &dec) != SCDE_OK)
+        dec = SCDE_DECIDE_DENY;
+    subject = scde__last_exec_subject();
+    if (dec == SCDE_DECIDE_DENY) {
+        log_msg("spawn: blocked by security policy (%s)", subject);
+        return;
+    }
+
+    if (dec != SCDE_DECIDE_ALLOW && pipe(pfd) != 0) {
+        /* fail-closed: no verified channel for restrictions -> no run */
+        scde_audit_log(SCDE_AUDIT_SANDBOX_FAILED, subject, 80,
+                       "cannot establish restriction channel");
+        log_msg("spawn: cannot restrict (%s)", subject);
+        return;
+    }
+
     pid = fork();
     if (pid < 0) {
+        if (pfd[0] >= 0) {
+            close(pfd[0]);
+            close(pfd[1]);
+        }
         log_msg("fork failed");
         return;
     }
-    if (pid > 0)
+    if (pid > 0) {
+        char ack = 0;
+        ssize_t n;
+
+        if (pfd[1] >= 0)
+            close(pfd[1]);
+        if (pfd[0] < 0)
+            return;
+        n = read(pfd[0], &ack, 1);
+        close(pfd[0]);
+        if (n == 1 && ack == 'O') {
+            if (dec == SCDE_DECIDE_SANDBOX)
+                scde_audit_log(SCDE_AUDIT_SANDBOX_CREATED, subject, 0,
+                               "sandbox verified");
+            else
+                scde_audit_log(SCDE_AUDIT_PROCESS_RESTRICTED, subject, 0,
+                               "restrictions verified");
+        } else {
+            scde_audit_log(SCDE_AUDIT_SANDBOX_FAILED, subject, 80,
+                           "child failed to apply restrictions");
+            log_msg("spawn: restriction failed (%s)", subject);
+        }
         return;
+    }
 
     /* child */
     setsid();
@@ -57,6 +114,24 @@ void spawn(const char *cmd)
         close(ConnectionNumber(sc.dpy));
     if (sc.lock_fd >= 0)
         close(sc.lock_fd);
+    if (pfd[0] >= 0)
+        close(pfd[0]);
+
+    if (dec != SCDE_DECIDE_ALLOW) {
+        scde_sandbox_tier_t tier =
+            (dec == SCDE_DECIDE_SANDBOX) ? SCDE_SANDBOX_FULL
+                                         : SCDE_SANDBOX_RESTRICT;
+        char ack = 'F';
+
+        if (scde_sandbox_apply(tier) == SCDE_OK)
+            ack = 'O';
+        if (pfd[1] >= 0) {
+            (void)!write(pfd[1], &ack, 1);
+            close(pfd[1]);
+        }
+        if (ack != 'O')
+            _exit(126);                 /* fail-closed: never run loose */
+    }
 
     {
         int fd = open("/dev/null", O_RDWR);
@@ -251,4 +326,22 @@ void draw_text_clip(Window w, int x, int max_x, int baseline_y,
         return;
     fit_text(buf, sizeof(buf), s, avail);
     draw_text(w, x, baseline_y, color, buf);
+}
+
+/*
+ * Mini "application window" glyph: a filled square with a highlighted title
+ * strip on top.  Used for the title bar icon and the task bar buttons so a
+ * window always shows an icon without needing X icon hints from the client.
+ */
+void draw_win_glyph(Window w, int x, int y, int size, unsigned long fg,
+                    unsigned long bg)
+{
+    if (size < 6)
+        return;
+    XSetForeground(sc.dpy, sc.gc, bg);
+    XFillRectangle(sc.dpy, w, sc.gc, x, y, (unsigned)size, (unsigned)size);
+    XSetForeground(sc.dpy, sc.gc, fg);
+    XFillRectangle(sc.dpy, w, sc.gc, x + 1, y + 1, (unsigned)(size - 2), 3);
+    XDrawRectangle(sc.dpy, w, sc.gc, x, y, (unsigned)(size - 1),
+                   (unsigned)(size - 1));
 }

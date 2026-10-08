@@ -175,6 +175,8 @@ static void fm_set_name(void)
 {
     char title[FM_PATH_MAX + 32];
 
+    if (fm_win == None)
+        return;
     snprintf(title, sizeof(title), "scde-fm: %s", cwd);
     XStoreName(sc.dpy, fm_win, title);
 }
@@ -334,14 +336,17 @@ static void fm_layout(void)
         fh = sc.sh - ph - 40;
     if (fh < 260)
         fh = 260;
-    fx = (sc.sw - fw) / 2;
-    {
-        int top = cfg.panel_top ? ph : 0;
-        int bottom = cfg.panel_top ? sc.sh : sc.sh - ph;
+    if (fm_win == None) {                /* only centre a fresh window;
+                                            a dragged one keeps its spot */
+        fx = (sc.sw - fw) / 2;
+        {
+            int top = cfg.panel_top ? ph : 0;
+            int bottom = cfg.panel_top ? sc.sh : sc.sh - ph;
 
-        fy = top + (bottom - top - fh) / 2;
-        if (fy < 0)
-            fy = 0;
+            fy = top + (bottom - top - fh) / 2;
+            if (fy < 0)
+                fy = 0;
+        }
     }
 
     n_btn = 0;
@@ -955,6 +960,13 @@ void fm_show(void)
     log_msg("fm: opened %s (%d entries)", cwd, n_ents);
 }
 
+void fm_show_path(const char *path)
+{
+    if (path && *path)
+        fm_cd(path);
+    fm_show();
+}
+
 void fm_hide(void)
 {
     if (!fm_is_open)
@@ -1044,6 +1056,8 @@ int fm_button(XButtonEvent *ev)
         }
         return 0;
     }
+    if (ev->button == Button1)
+        XSetInputFocus(sc.dpy, fm_win, RevertToPointerRoot, CurrentTime);
 
     /* context menu open: only menu clicks count */
     if (mode == FM_MODE_CTX) {
@@ -1068,7 +1082,9 @@ int fm_button(XButtonEvent *ev)
         return 1;
     }
     if (ev->y < FM_TITLE_H) {
-        return 1;                         /* drag-less title bar */
+        if (ev->button == Button1)   /* title bar drags the window */
+            selfdrag_window(fm_win, ev, &fx, &fy, fw, fh);
+        return 1;
     }
 
     /* toolbar buttons */

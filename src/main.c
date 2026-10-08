@@ -4,6 +4,13 @@
  */
 #include "scde.h"
 
+#include <scde/app.h>
+#include <scde/event.h>
+#include <scde/plugin.h>
+#include <scde/security.h>
+#include <scde/security_bait.h>
+#include <scde/security_mirage.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -280,8 +287,9 @@ static void setup_root(void)
     XSetErrorHandler(on_xerror);
 
     attrs.event_mask = SubstructureRedirectMask | SubstructureNotifyMask |
-                       ButtonPressMask | KeyPressMask | PropertyChangeMask |
-                       StructureNotifyMask;
+                       ButtonPressMask | ButtonReleaseMask | KeyPressMask |
+                       PropertyChangeMask | StructureNotifyMask |
+                       ExposureMask | PointerMotionMask;
     XChangeWindowAttributes(sc.dpy, sc.root, CWEventMask, &attrs);
 
     startup_phase = 1;
@@ -338,9 +346,13 @@ static void dispatch(XEvent *ev)
     case MotionNotify:
         if (msgbox_motion(&ev->xmotion))
             break;
+        if (security_gui_motion(&ev->xmotion))
+            break;
         if (fm_motion(&ev->xmotion))
             break;
-        if (ev->xmotion.window == sc.panel)
+        if (ev->xmotion.window == sc.root)
+            desktop_motion(&ev->xmotion);
+        else if (ev->xmotion.window == sc.panel)
             panel_motion(&ev->xmotion);
         else if (ev->xmotion.window == sc.menu)
             menu_motion(&ev->xmotion);
@@ -348,10 +360,15 @@ static void dispatch(XEvent *ev)
             handle_frame_motion(&ev->xmotion);
         break;
     case Expose:
-        handle_expose(&ev->xexpose);
+        if (ev->xexpose.window == sc.root)
+            desktop_expose(&ev->xexpose);
+        else
+            handle_expose(&ev->xexpose);
         break;
     case PropertyNotify:
         handle_property_notify(&ev->xproperty);
+        if (ev->xproperty.window == sc.root)
+            desktop_root_property(&ev->xproperty);
         break;
     case ClientMessage:
         handle_client_message(&ev->xclient);
@@ -370,13 +387,15 @@ static void dispatch(XEvent *ev)
 
 static void event_loop(void)
 {
-    struct pollfd pfd;
-
-    pfd.fd = ConnectionNumber(sc.dpy);
-    pfd.events = POLLIN;
-    pfd.revents = 0;
-
     while (sc.running) {
+        struct pollfd pfds[2];
+        int np = 1;
+        int wfd;
+        int timeout;
+        int rc;
+
+        scde_event_dispatch();          /* deliver App API events */
+
         if (XPending(sc.dpy) > 0) {
             XEvent ev;
             XNextEvent(sc.dpy, &ev);
@@ -385,14 +404,33 @@ static void event_loop(void)
             continue;
         }
 
-        int timeout = panel_timeout_ms();
-        int rc = poll(&pfd, 1, timeout);
+        pfds[0].fd = ConnectionNumber(sc.dpy);
+        pfds[0].events = POLLIN;
+        pfds[0].revents = 0;
+        wfd = scde_security_watch_fd(); /* inotify, ALWAYS_ON only */
+        if (wfd >= 0) {
+            pfds[1].fd = wfd;
+            pfds[1].events = POLLIN;
+            pfds[1].revents = 0;
+            np = 2;
+        }
+
+        timeout = panel_timeout_ms();
+        rc = poll(pfds, (nfds_t)np, timeout);
 
         if (rc < 0) {
             if (errno == EINTR)
                 continue;
             log_msg("poll failed: %s", strerror(errno));
             break;
+        }
+        if (np == 2 && (pfds[1].revents & POLLIN)) {
+            scde_security_pump();
+            /* bait sweep rides the same wakeup: no extra daemon, no
+             * polling loop - detection stays event-driven and bounded */
+            if (scde_bait_enabled())
+                scde_bait_check();
+            security_gui_redraw();      /* live security log */
         }
         panel_tick();
     }
@@ -402,9 +440,17 @@ static void event_loop(void)
 
 static void cleanup(void)
 {
+    security_gui_cleanup();
+    scde_bait_shutdown();
+    scde_mirage_shutdown();
+    scde_security_shutdown();
+    scde_plugins_shutdown();
+    scde_app_shutdown();
+
     menu_hide();
     cmd_hide();
     fm_cleanup();
+    desktop_cleanup();
 
     while (sc.clients) {
         Client *c = sc.clients;
@@ -490,7 +536,12 @@ static void usage(int code)
            "  Alt+Enter     start terminal        Alt+E        file manager\n"
            "  Alt+Up        maximize              Alt+Down     minimize\n"
            "  Alt+Left/Right  snap half screen    Alt+D        show desktop\n"
-           "  right click desktop   desktop menu\n");
+           "  right click desktop   desktop menu\n"
+           "\n"
+           "desktop shortcuts:\n"
+           "  click  select        double click  open\n"
+           "  right click icon     icon menu     drag  move\n"
+           "  shortcuts are files in ~/Desktop (*.desktop runs Exec=)\n");
     exit(code);
 }
 
@@ -581,10 +632,25 @@ int main(int argc, char **argv)
     log_msg("SCDE %s started on %dx%d (display %s)", SCDE_VERSION, sc.sw,
             sc.sh, DisplayString(sc.dpy));
 
+    {
+        scde_app_info_t app = { SCDE_NAME, SCDE_VERSION,
+                                "Solo Coding Desktop Environment", NULL };
+
+        scde_app_init(&app);
+    }
+
     apps_scan();
     panel_create();
     manage_existing();
+    desktop_init();
     panel_update();
+
+    scde_security_init(NULL);        /* scanner + policy + audit + gate */
+
+    if (scde_plugins_init(NULL) == SCDE_OK) {
+        scde_plugins_discover();
+        scde_plugins_load_all();
+    }
 
     event_loop();
 

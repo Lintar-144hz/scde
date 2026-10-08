@@ -64,8 +64,9 @@ Only `libX11` and libc are required at run time.
 
 ### Implemented
 
-* **Window management** — reparenting title-bar frames, focus-follows-mouse,
-  `Alt`+drag move, `Alt`+right-drag / 5 px edge resize, title-bar
+* **Window management** — reparenting title-bar frames, focus-follows-mouse
+  (or click-to-focus with `focus_follows_mouse=0`), `Alt`+drag move,
+  `Alt`+right-drag / edge resize, title-bar
   min/max/close buttons, double-click title to maximize, `Alt+Up`/`Alt+Down`,
   half-screen snap, `Alt+Tab` / `Shift+Alt+Tab`, `Alt+F4`, `Alt+D`
   (show desktop), `_NET_WM_STATE_FULLSCREEN`, `ConfigureRequest` handling.
@@ -73,13 +74,24 @@ Only `libX11` and libc are required at run time.
   clock, show-desktop strip, three decorative status glyphs
   (network / volume / battery).
 * **Application menu** — pinned entries plus every
-  `/usr/share/applications/*.desktop`, scrollable, `Alt+Space`.
+  `/usr/share/applications/*.desktop`, compact and searchable (type to
+  filter, arrows to move, `Enter` runs, `Esc` closes), `Alt+Space`.
 * **Command launcher** — `Alt+F2`, runs a command or opens a URL in the
   detected browser.
-* **Desktop menu** — right click on the wallpaper (Terminal, Browser, Run…,
-  Applications, Log out).
-* **Message dialogs** — including the Plasma-style "program not installed"
-  notice instead of failing silently.
+ * **Desktop menu** — right click on the wallpaper: terminal, editor, file
+   manager, browser, Run…, Applications, New Folder, New File, Refresh,
+   Security Center, Log out.
+* **Desktop shortcuts** — `~/Desktop` is drawn on the wallpaper: click to
+  select, double click to open (`*.desktop` runs its `Exec=`), right click
+  for Open / Open in File Manager / Properties / Set as wallpaper / Refresh,
+  drag to rearrange (positions kept in
+  `~/.local/share/scde/desktop.layout`).
+ * **Message dialogs** — including the Plasma-style "program not installed"
+   notice instead of failing silently.
+ * **Security Center** — built-in security application (no terminal): tray
+   shield or the launcher's "Security Center" entry opens a window with the
+   protection mode (Always-on / Passive / Off), bounded scans (plugins /
+   Desktop / Home), permission toggles and a scrollable security log.
 * **Built-in file manager** — `Alt+E`: navigate, open, rename (`F2`),
   delete (confirmed), new folder (`Ctrl+N`), hidden files (`Ctrl+H`),
   right-click menu (Open / Rename / Delete / Properties / Set as wallpaper).
@@ -90,7 +102,7 @@ Only `libX11` and libc are required at run time.
   reported and ignored, built-in defaults when the file is missing.
 * **Lifecycle** — single-instance `fcntl` lock, clean shutdown on
   `SIGINT`/`SIGTERM`/`SIGHUP` with clients reparented back to the root.
-* **Test suite** — 74 automated checks on Xvfb plus three small X test
+* **Test suite** — 82 automated checks on Xvfb plus three small X test
   clients.
 * **HAL** — a separate, dependency-free static library (`hal/libhal.a`)
   with GPU / Bluetooth / Audio APIs, Linux and Android backends, and its own
@@ -121,7 +133,7 @@ Not implemented yet — see [Roadmap](#roadmap).
 
 | Area | Behaviour |
 |---|---|
-| Look | Plasma-style: reparented frame windows, gradient wallpaper, title bar with min/max/close, hover states, double-click title = maximize |
+| Look | Windows style: reparented frame windows, gradient wallpaper, dark title bar with app icon and min/max/close (restore) buttons, red close hover, double-click title = maximize |
 | Window management | MapRequest, ConfigureRequest, DestroyNotify, UnmapNotify, focus-follows-mouse, fullscreen via `_NET_WM_STATE_FULLSCREEN` |
 | Move | `Alt` + Left-drag, or drag the title bar |
 | Resize | `Alt` + Right-drag, or drag a window edge (5 px) |
@@ -130,14 +142,16 @@ Not implemented yet — see [Roadmap](#roadmap).
 | Snap | `Alt+Left` / `Alt+Right` half screen |
 | Show desktop | `Alt+D` or the strip at the far right of the panel |
 | Switch windows | `Alt+Tab`, `Shift+Alt+Tab` (wraps) |
-| Panel | launcher icon, task buttons (active accent), decorative status glyphs, two-line clock |
-| App menu | pinned entries + every `/usr/share/applications/*.desktop`, scrollable, `Alt+Space` or the launcher button |
-| Program detection | terminal / editor / browser picked from `PATH` (or your `terminal=`, `browser=` config); built-in menu entries are `@terminal`, `@editor`, `@files`, `@browser`, `@apps`, `@run`, `@desktop`, `@logout` |
+| Panel | Windows style taskbar: accent Start logo, task buttons with mini icon + label, close ✕ on each wide task button and accent underline for the focused window, tray glyphs (network, volume, battery, Security shield), two-line clock, show-desktop strip |
+| App menu | pinned entries + every `/usr/share/applications/*.desktop`, type-to-search with icon tiles, `Alt+Space` or the launcher button |
+| Program detection | terminal / editor / browser picked from `PATH` (or your `terminal=`, `browser=` config); built-in menu entries are `@terminal`, `@editor`, `@files`, `@browser`, `@apps`, `@run`, `@desktop`, `@security`, `@logout` |
 | Missing program | a Plasma-style notice dialog tells you what to install instead of failing silently |
-| Desktop menu | right click on the wallpaper: Terminal, Browser, Run…, Applications, Log out |
+| Desktop menu | right click on the wallpaper: terminal, editor, file manager, browser, Run…, Applications, New Folder, New File, Refresh, Security Center, Log out |
+| Desktop shortcuts | `~/Desktop` on the wallpaper: click selects, double click opens (a `*.desktop` entry runs its `Exec=`), right click = icon menu, drag = rearrange (saved in `~/.local/share/scde/desktop.layout`); installed applications are shown as icons on the left half (`desktop_apps=1`) |
 | Command launcher | `Alt+F2` — runs a command, or opens a URL (`example.com`, `https://…`) in the detected browser |
 | Terminal | `Alt+Enter` (configurable) — starts the detected external terminal |
 | File manager | `Alt+E` — built in: navigate, rename (F2), delete, new folder, right-click menu, hidden files (Ctrl+H) |
+| Security Center | tray shield or launcher "Security Center": protection mode (Always-on starts the filesystem watcher), scanner (plugins / Desktop / Home, bounded), permission toggles, scrollable security log with Clear |
 | Media | photos open with feh, video/music with mpv; `wallpaper=` in the config sets the background |
 | Config | `~/.config/scde/config` (key=value) |
 | Shutdown | clean `SIGINT`/`SIGTERM`/`SIGHUP` handling, clients reparented back to the root |
@@ -156,6 +170,10 @@ scde/
 ├── README.md
 ├── config/
 │   └── scde-config.sample   annotated configuration template
+├── docs/
+│   └── SCDE_APP_API.md      App API + plugin ABI reference
+├── include/scde/            public App API headers (app, event, plugin, ...)
+├── plugins/example/         example plugin (built by `make plugins`)
 ├── src/                     the desktop itself — one process
 │   ├── scde.h               shared types, config struct, prototypes
 │   ├── main.c               X connection, setup, poll() loop, signals, lock
@@ -163,10 +181,15 @@ scde/
 │   ├── input.c              key/button grabs, Alt-drag, desktop clicks
 │   ├── panel.c              panel, task buttons, clock, status glyphs
 │   ├── launcher.c           application menu + Alt+F2 prompt
+│   ├── desktop.c            desktop shortcuts: icons, menus, moving
 │   ├── fm.c                 built-in file manager
 │   ├── apps.c               program detection, launch helpers, media
 │   ├── msgbox.c             modal message dialogs
+│   ├── security_gui.c       built-in Security Center window
 │   ├── config.c             config parser
+│   ├── api/                 App API implementation (libscdeapp.a)
+│   ├── plugin/              plugin loader + manager (dlopen)
+│   ├── security/            security core: scanner, policy, audit, trust
 │   └── util.c               logging, spawn, colours, text helpers
 ├── hal/                     separate hardware abstraction library
 │   ├── Makefile             builds libhal.a + its two tools
@@ -176,7 +199,9 @@ scde/
 │   │   └── backends/android/  Android detection + property/sysfs readers
 │   └── tests/               hal_smoke.c (182 checks), hal_info.c
 ├── tests/                   X11 test suite
-│   ├── run_tests.sh         74 checks on Xvfb (timeout-guarded by make)
+│   ├── run_tests.sh         82 checks on Xvfb (timeout-guarded by make)
+│   ├── api_test.c           App API tests (headless, 300 checks)
+│   ├── plugins/             badver/failinit test plugins
 │   ├── testclient.c         minimal X client used by the suite
 │   ├── rootpixel.c          reads the root window pixel
 │   ├── screenshot.c         dumps the root window as PPM
@@ -189,13 +214,33 @@ Build artifacts (all removed by `make clean`):
 | Path | Produced by |
 |---|---|
 | `build/src/*.o`, `*.d` | `make` (release objects + auto header deps) |
+| `build/libscdeapp.a` | `make` (App API + plugin system) |
+| `build/plugins/*.so` | `make plugins` (example + test plugins) |
 | `scde` | `make` |
-| `tests/testclient`, `tests/rootpixel`, `tests/screenshot` | `make` |
+| `tests/testclient`, `tests/rootpixel`, `tests/screenshot`, `tests/api_test` | `make` |
 | `build-debug/`, `scde-debug` | `make debug` |
 | `hal/src/**/*.o`, `hal/libhal.a`, `hal/tests/hal_smoke`, `hal/tests/hal_info` | `make hal` / `make test` |
 
 `src/` and `hal/` are **independent**: the desktop does not link the HAL.
 There is no `configure` script, no generated sources, and no submodules.
+
+---
+
+## App API and plugins
+
+SCDE exposes a small native C API (`include/scde/*.h`, implemented in
+`src/api/` + `src/plugin/`, linked as `build/libscdeapp.a`): app lifecycle and
+services, an event queue, notifications, read-only config access, minimal
+top-level windows, and a **plugin system** (one `.so` exporting
+`scde_plugin_info` / `scde_plugin_init` / `scde_plugin_shutdown`, validated
+against ABI + API version before `init()` runs, communicating only through a
+versioned `scde_api_t` table).  Plugins are discovered from
+`~/.local/share/scde/plugins` (plus `$SCDE_PLUGIN_PATH`); a broken plugin is
+logged, marked failed, and never takes the session down.
+
+See **`docs/SCDE_APP_API.md`** for the full reference, and note that
+`make test` runs the headless API tests (`tests/api_test`, 300 checks)
+between the HAL tests and the Xvfb suite.
 
 ---
 
@@ -382,15 +427,18 @@ make test
 Runs two real suites and reports both:
 
 1. **HAL** — `hal/tests/hal_smoke` (182 checks) and `hal/tests/hal_info`.
-2. **SCDE on Xvfb** — `tests/run_tests.sh` (74 checks): startup/single
+2. **SCDE on Xvfb** — `tests/run_tests.sh` (82 checks): startup/single
    instance, panel geometry, background colour, mapping and borders,
    `_NET_CLIENT_LIST`, focus-follows-mouse, `Alt+Tab` both directions,
    `Alt+drag` move & resize, `ConfigureRequest`, `Alt+F4`, app menu
    open/close/run, `Alt+F2` prompt, help/version, SIGTERM shutdown + restart,
    one process / one thread / RSS / idle CPU / binary size, client
    destruction, maximize/snap/minimize/show-desktop, desktop menu,
-   `Alt+F2` URL → browser, the missing-program notice dialog, and the built-in
-   file manager.
+   `Alt+F2` URL → browser, the missing-program notice dialog, the built-in
+   file manager, and the desktop shortcuts (icon painted at its saved
+   position, select / deselect by pixel, double click runs `Exec=`, icon
+   context menu, New Folder from the desktop menu, drag rewrites the layout
+   file).
 
 The X suite is wrapped in a hard timeout (default **300 s**, override with
 `make test TEST_TIMEOUT=600`) so it can never hang the build. It starts its
@@ -444,8 +492,9 @@ steps you need to run.
 ```
 panel=bottom              # top | bottom
 panel_height=32
-border_width=1            # frame border
-title_height=24           # Plasma style title bar
+border_width=3            # frame border (>= 3 = usable resize grip)
+title_height=24           # Windows style title bar
+desktop_apps=1            # installed apps as desktop icons (left half)
 focus_follows_mouse=1
 show_clock=1
 show_tray=1

@@ -610,7 +610,7 @@ void apps_scan(void)
 
     qsort(apps, (size_t)n, sizeof(MenuEntry), cmp_entry);
 
-    total = cfg.menu_count + (n > 0 ? 1 + n : 0);
+    total = cfg.menu_count + (n > 0 ? 1 + n : 0) + 2;   /* + Security */
     sc.menu_items = calloc((size_t)(total > 0 ? total : 1), sizeof(MenuEntry));
     if (!sc.menu_items) {
         free(apps);
@@ -628,6 +628,17 @@ void apps_scan(void)
         for (i = 0; i < n; i++)
             sc.menu_items[sc.menu_item_count++] = apps[i];
     }
+    if (sc.menu_item_count > 0) {        /* separator + Security Center */
+        str_copy(sc.menu_items[sc.menu_item_count].label,
+                 sizeof(sc.menu_items[0].label), "-");
+        sc.menu_items[sc.menu_item_count].cmd[0] = '\0';
+        sc.menu_item_count++;
+    }
+    str_copy(sc.menu_items[sc.menu_item_count].label,
+             sizeof(sc.menu_items[0].label), "Security Center");
+    str_copy(sc.menu_items[sc.menu_item_count].cmd,
+             sizeof(sc.menu_items[0].cmd), "@security");
+    sc.menu_item_count++;
 
     free(apps);
     str_copy(sc.browser, sizeof(sc.browser), apps_browser());

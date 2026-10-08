@@ -14,14 +14,15 @@ void config_defaults(Config *c)
 {
     memset(c, 0, sizeof(*c));
 
-    c->panel_top = 0;                    /* bottom panel (Plasma style) */
+    c->panel_top = 0;                    /* bottom panel (Windows style) */
     c->panel_height = 32;
-    c->border_width = 1;
+    c->border_width = 3;                /* >= 3 gives a usable resize grip */
     c->title_height = 24;
     c->focus_follows_mouse = 1;
     c->show_clock = 1;
     c->show_tray = 1;
     c->show_desktop_btn = 1;
+    c->desktop_apps = 1;                /* installed apps on the desktop */
     str_copy(c->clock_format, sizeof(c->clock_format), "%H:%M");
     str_copy(c->clock_date_format, sizeof(c->clock_date_format), "%b %d");
     str_copy(c->terminal, sizeof(c->terminal), "xterm");
@@ -29,28 +30,28 @@ void config_defaults(Config *c)
     str_copy(c->font, sizeof(c->font),
              "-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*");
 
-    /* Plasma-ish dark palette */
+    /* Windows 10 dark palette */
     str_copy(c->s_background, sizeof(c->s_background), "#0e1117");
     str_copy(c->s_wallpaper_top, sizeof(c->s_wallpaper_top), "#1b2436");
     str_copy(c->s_wallpaper_bottom, sizeof(c->s_wallpaper_bottom), "#0b0d12");
-    str_copy(c->s_border_focus, sizeof(c->s_border_focus), "#3daee9");
-    str_copy(c->s_border_unfocus, sizeof(c->s_border_unfocus), "#23262c");
-    str_copy(c->s_title_bg, sizeof(c->s_title_bg), "#2b303a");
+    str_copy(c->s_border_focus, sizeof(c->s_border_focus), "#0078d7");
+    str_copy(c->s_border_unfocus, sizeof(c->s_border_unfocus), "#3b3b3b");
+    str_copy(c->s_title_bg, sizeof(c->s_title_bg), "#2b2b2b");
     str_copy(c->s_title_bg_inactive, sizeof(c->s_title_bg_inactive),
-             "#22252c");
-    str_copy(c->s_title_fg, sizeof(c->s_title_fg), "#eaeef3");
+             "#202020");
+    str_copy(c->s_title_fg, sizeof(c->s_title_fg), "#ffffff");
     str_copy(c->s_title_fg_inactive, sizeof(c->s_title_fg_inactive),
-             "#8b93a1");
-    str_copy(c->s_title_hover, sizeof(c->s_title_hover), "#39414d");
-    str_copy(c->s_close_hover, sizeof(c->s_close_hover), "#d32f2f");
-    str_copy(c->s_panel_bg, sizeof(c->s_panel_bg), "#171a20");
-    str_copy(c->s_panel_fg, sizeof(c->s_panel_fg), "#c9d1db");
-    str_copy(c->s_btn_active, sizeof(c->s_btn_active), "#2f5f8a");
-    str_copy(c->s_btn_inactive, sizeof(c->s_btn_inactive), "#24272e");
-    str_copy(c->s_btn_hover, sizeof(c->s_btn_hover), "#3a414c");
-    str_copy(c->s_menu_bg, sizeof(c->s_menu_bg), "#1c1f26");
-    str_copy(c->s_menu_fg, sizeof(c->s_menu_fg), "#d5dae2");
-    str_copy(c->s_menu_sel, sizeof(c->s_menu_sel), "#2d5f8f");
+             "#9a9a9a");
+    str_copy(c->s_title_hover, sizeof(c->s_title_hover), "#3d3d3d");
+    str_copy(c->s_close_hover, sizeof(c->s_close_hover), "#e81123");
+    str_copy(c->s_panel_bg, sizeof(c->s_panel_bg), "#1f1f1f");
+    str_copy(c->s_panel_fg, sizeof(c->s_panel_fg), "#ffffff");
+    str_copy(c->s_btn_active, sizeof(c->s_btn_active), "#4d4d4d");
+    str_copy(c->s_btn_inactive, sizeof(c->s_btn_inactive), "#333333");
+    str_copy(c->s_btn_hover, sizeof(c->s_btn_hover), "#454545");
+    str_copy(c->s_menu_bg, sizeof(c->s_menu_bg), "#2b2b2b");
+    str_copy(c->s_menu_fg, sizeof(c->s_menu_fg), "#ffffff");
+    str_copy(c->s_menu_sel, sizeof(c->s_menu_sel), "#0078d7");
 }
 
 static int to_int(const char *v, int lo, int hi, int fallback)
@@ -138,6 +139,8 @@ int config_load(Config *c, const char *path)
             c->show_tray = to_int(val, 0, 1, 1);
         else if (strcmp(key, "show_desktop_btn") == 0)
             c->show_desktop_btn = to_int(val, 0, 1, 1);
+        else if (strcmp(key, "desktop_apps") == 0)
+            c->desktop_apps = to_int(val, 0, 1, c->desktop_apps);
         else if (strcmp(key, "clock_format") == 0)
             str_copy(c->clock_format, sizeof(c->clock_format), val);
         else if (strcmp(key, "clock_date_format") == 0)
@@ -206,22 +209,22 @@ int config_resolve_colors(Config *c)
     c->col_background = parse_color(c->s_background, 0x0e1117);
     c->col_wallpaper_top = parse_color(c->s_wallpaper_top, 0x1b2436);
     c->col_wallpaper_bottom = parse_color(c->s_wallpaper_bottom, 0x0b0d12);
-    c->col_border_focus = parse_color(c->s_border_focus, 0x3daee9);
-    c->col_border_unfocus = parse_color(c->s_border_unfocus, 0x23262c);
-    c->col_title_bg = parse_color(c->s_title_bg, 0x2b303a);
-    c->col_title_bg_inactive = parse_color(c->s_title_bg_inactive, 0x22252c);
-    c->col_title_fg = parse_color(c->s_title_fg, 0xeaeef3);
-    c->col_title_fg_inactive = parse_color(c->s_title_fg_inactive, 0x8b93a1);
-    c->col_title_hover = parse_color(c->s_title_hover, 0x39414d);
-    c->col_close_hover = parse_color(c->s_close_hover, 0xd32f2f);
-    c->col_panel_bg = parse_color(c->s_panel_bg, 0x171a20);
-    c->col_panel_fg = parse_color(c->s_panel_fg, 0xc9d1db);
-    c->col_btn_active = parse_color(c->s_btn_active, 0x2f5f8a);
-    c->col_btn_inactive = parse_color(c->s_btn_inactive, 0x24272e);
-    c->col_btn_hover = parse_color(c->s_btn_hover, 0x3a414c);
-    c->col_menu_bg = parse_color(c->s_menu_bg, 0x1c1f26);
-    c->col_menu_fg = parse_color(c->s_menu_fg, 0xd5dae2);
-    c->col_menu_sel = parse_color(c->s_menu_sel, 0x2d5f8f);
+    c->col_border_focus = parse_color(c->s_border_focus, 0x0078d7);
+    c->col_border_unfocus = parse_color(c->s_border_unfocus, 0x3b3b3b);
+    c->col_title_bg = parse_color(c->s_title_bg, 0x2b2b2b);
+    c->col_title_bg_inactive = parse_color(c->s_title_bg_inactive, 0x202020);
+    c->col_title_fg = parse_color(c->s_title_fg, 0xffffff);
+    c->col_title_fg_inactive = parse_color(c->s_title_fg_inactive, 0x9a9a9a);
+    c->col_title_hover = parse_color(c->s_title_hover, 0x3d3d3d);
+    c->col_close_hover = parse_color(c->s_close_hover, 0xe81123);
+    c->col_panel_bg = parse_color(c->s_panel_bg, 0x1f1f1f);
+    c->col_panel_fg = parse_color(c->s_panel_fg, 0xffffff);
+    c->col_btn_active = parse_color(c->s_btn_active, 0x4d4d4d);
+    c->col_btn_inactive = parse_color(c->s_btn_inactive, 0x333333);
+    c->col_btn_hover = parse_color(c->s_btn_hover, 0x454545);
+    c->col_menu_bg = parse_color(c->s_menu_bg, 0x2b2b2b);
+    c->col_menu_fg = parse_color(c->s_menu_fg, 0xffffff);
+    c->col_menu_sel = parse_color(c->s_menu_sel, 0x0078d7);
     return 0;
 }
 

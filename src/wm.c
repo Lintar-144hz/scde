@@ -1,5 +1,5 @@
 /*
- * SCDE - window management (reparented frames with a Plasma style title bar)
+ * SCDE - window management (reparented frames with a Windows style title bar)
  */
 #include "scde.h"
 
@@ -78,9 +78,22 @@ void frame_sync(Client *c)
 
 /* ---------------------------------------------------------- title bar art */
 
+/* width of one title-bar button: Windows style (46 px), shrinking on very
+   narrow windows instead of dropping the buttons all (0 = no room) */
+static int title_btn_w(int W)
+{
+    int bw = (W - 16) / 3;
+
+    if (bw > 46)
+        bw = 46;
+    return bw < 14 ? 0 : bw;
+}
+
 void frame_paint(Client *c)
 {
-    int W, th, i;
+    int W, th, i, bw;
+    int icon_w = 15;
+    int have_icon;
     unsigned long bg, fg;
 
     if (c->frame == None || c->fullscreen || c->minimized)
@@ -90,43 +103,70 @@ void frame_paint(Client *c)
     th = c->title_h;
     bg = sc.focused == c ? cfg.col_title_bg : cfg.col_title_bg_inactive;
     fg = sc.focused == c ? cfg.col_title_fg : cfg.col_title_fg_inactive;
+    bw = title_btn_w(W);
+    have_icon = th >= 18 && W - bw * 3 > icon_w + 24;
 
     XSetForeground(sc.dpy, sc.gc, bg);
     XFillRectangle(sc.dpy, c->frame, sc.gc, 0, 0, (unsigned)W, (unsigned)th);
 
-    /* window buttons (right side) */
-    for (i = BTN_MIN; i <= BTN_CLOSE; i++) {
-        int bx = W - TITLE_BTN_W * (BTN_CLOSE - i + 1);
-        int cx = bx + TITLE_BTN_W / 2;
-        int cy = th / 2;
+    /* application icon (left) */
+    if (have_icon)
+        draw_win_glyph(c->frame, 8, (th - icon_w) / 2, icon_w, fg, bg);
 
-        if (W < TITLE_BTN_W * 3 + 24)
-            break;
+    /* window buttons (right side): Windows style glyphs */
+    for (i = BTN_MIN; i <= BTN_CLOSE && bw > 0; i++) {
+        int bx = W - bw * (BTN_CLOSE - i + 1);
+        int cx = bx + bw / 2;
+        int cy = th / 2;
+        unsigned long gf = fg;
+
         if (c->hover_btn == i) {
             XSetForeground(sc.dpy, sc.gc,
                            i == BTN_CLOSE ? cfg.col_close_hover
                                           : cfg.col_title_hover);
-            XFillRectangle(sc.dpy, c->frame, sc.gc, bx, 0,
-                           (unsigned)TITLE_BTN_W, (unsigned)th);
+            XFillRectangle(sc.dpy, c->frame, sc.gc, bx, 0, (unsigned)bw,
+                           (unsigned)th);
+            if (i == BTN_CLOSE)
+                gf = 0xffffffUL;        /* white cross stays white on red */
         }
-        XSetForeground(sc.dpy, sc.gc, fg);
+        XSetForeground(sc.dpy, sc.gc, gf);
         if (i == BTN_MIN) {
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy + 4, cx + 5, cy + 4);
+            /* minus sign, sitting on the baseline of the glyph box */
+            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy + 5, cx + 5, cy + 5);
         } else if (i == BTN_MAX) {
-            XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, 10, 10);
+            if (c->maximized) {
+                /* restore: two overlapping windows, front one on top */
+                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 7, cy - 7, 10,
+                               10);
+                XSetForeground(sc.dpy, sc.gc, bg);
+                XFillRectangle(sc.dpy, c->frame, sc.gc, cx - 2, cy - 2, 10,
+                               10);
+                XSetForeground(sc.dpy, sc.gc, gf);
+                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 2, cy - 2, 10,
+                               10);
+                XFillRectangle(sc.dpy, c->frame, sc.gc, cx - 1, cy - 1, 8, 2);
+            } else {
+                /* maximize: square with a bold top edge */
+                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, 11,
+                               11);
+                XFillRectangle(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, 11, 2);
+            }
         } else {
             XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, cx + 5, cy + 5);
             XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy + 5, cx + 5, cy - 5);
         }
     }
 
-    /* title text */
+    /* title text (Windows: left aligned after the icon) */
     {
-        int limit = W - TITLE_BTN_W * 3 - 16;
+        int tx = 8;
+        int limit = W - (bw > 0 ? bw * 3 : 0) - 8;
         int baseline = (th + sc.font_ascent - sc.font_descent) / 2;
 
-        if (limit > 20)
-            draw_text_clip(c->frame, 10, limit, baseline, fg, c->name);
+        if (have_icon)
+            tx += icon_w + 8;
+        if (limit - tx > 20)
+            draw_text_clip(c->frame, tx, limit, baseline, fg, c->name);
     }
 
     /* separator between title bar and content */
@@ -136,14 +176,15 @@ void frame_paint(Client *c)
 
 int frame_button_at(Client *c, int x, int y)
 {
+    int bw = title_btn_w(c->w);
     int bx;
 
-    if (y < 0 || y >= c->title_h || c->w < TITLE_BTN_W * 3 + 24)
+    if (y < 0 || y >= c->title_h || bw == 0)
         return BTN_NONE;
-    bx = c->w - TITLE_BTN_W * 3;
-    if (x >= bx + 2 * TITLE_BTN_W)
+    bx = c->w - bw * 3;
+    if (x >= bx + 2 * bw)
         return BTN_CLOSE;
-    if (x >= bx + TITLE_BTN_W)
+    if (x >= bx + bw)
         return BTN_MAX;
     if (x >= bx)
         return BTN_MIN;
@@ -532,6 +573,7 @@ void manage(Window w)
                            StructureNotifyMask);
     XSetWindowBorderWidth(sc.dpy, w, 0);
     XAddToSaveSet(sc.dpy, w);
+    input_grab_client(w);
 
     create_frame(c, c->x, c->y);
     if (wa.map_state == IsViewable)
@@ -581,6 +623,7 @@ void unmanage(Client *c, int client_alive)
 
     if (client_alive) {
         XSelectInput(sc.dpy, c->win, NoEventMask);
+        input_ungrab_client(c->win);
         XUnmapWindow(sc.dpy, c->frame);
         XReparentWindow(sc.dpy, c->win, sc.root, c->x + c->bw,
                         c->y + c->bw + c->title_h);
@@ -595,9 +638,13 @@ void unmanage(Client *c, int client_alive)
     free(c);
 
     update_client_list();
-    if (!sc.focused && sc.clients)
-        focus_client(sc.clients);
-    else
+    if (!sc.focused && sc.clients) {
+        /* skip hidden windows: restoring a minimized one would pop it up */
+        for (it = sc.clients; it; it = it->next)
+            if (!it->minimized)
+                break;
+        focus_client(it);
+    } else
         update_active_property();
     panel_update();
 }
@@ -636,7 +683,6 @@ void handle_configure_request(XConfigureRequestEvent *ev)
     wc.sibling = ev->above;
     wc.stack_mode = ev->detail;
     mask &= ~(unsigned int)CWBorderWidth;
-
     if (c->fullscreen) {
         mask &= (unsigned int)(CWSibling | CWStackMode);
         XConfigureWindow(sc.dpy, c->frame, mask, &wc);
@@ -672,6 +718,7 @@ void handle_configure_request(XConfigureRequestEvent *ev)
         wc.sibling = None;
         XConfigureWindow(sc.dpy, c->frame,
                          mask & (unsigned int)(CWSibling | CWStackMode), &wc);
+        panel_raise();                  /* keep the panel on top */
     }
     panel_update();
 }
@@ -703,8 +750,6 @@ void handle_enter_notify(XCrossingEvent *ev)
 {
     Client *c;
 
-    if (!cfg.focus_follows_mouse)
-        return;
     if (ev->mode != NotifyNormal)
         return;
     if (menu_is_open() || cmd_is_open())
@@ -712,7 +757,13 @@ void handle_enter_notify(XCrossingEvent *ev)
     c = client_find(ev->window);
     if (!c)
         c = client_from_frame(ev->window);
-    if (c)
+    if (!c)
+        return;
+    if (c->hover_btn != BTN_NONE) {     /* stale hover from the last visit */
+        c->hover_btn = BTN_NONE;
+        frame_paint(c);
+    }
+    if (cfg.focus_follows_mouse)
         focus_client(c);
 }
 
@@ -763,7 +814,13 @@ void handle_expose(XExposeEvent *ev)
 {
     Client *c;
 
+    if (ev->window == sc.root) {         /* dragged windows reveal the */
+        desktop_expose(ev);              /* desktop: repaint icons here */
+        return;
+    }
     if (msgbox_expose(ev))
+        return;
+    if (security_gui_expose(ev))
         return;
     if (fm_expose(ev))
         return;

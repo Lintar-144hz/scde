@@ -23,7 +23,6 @@
 #define MAX_PANEL_BTNS 256
 #define MIN_CLIENT_SIZE 48
 #define NAME_MAX_LEN 128
-#define TITLE_BTN_W 24
 
 /* drag modes */
 #define DRAG_MOVE      0
@@ -56,6 +55,7 @@ typedef struct {
     int show_clock;
     int show_tray;
     int show_desktop_btn;
+    int desktop_apps;               /* 1 = installed apps shown as icons */
     char clock_format[64];
     char clock_date_format[64];
     char terminal[128];
@@ -201,6 +201,8 @@ void draw_text(Window w, int x, int baseline_y, unsigned long color,
                const char *s);
 void draw_text_clip(Window w, int x, int max_x, int baseline_y,
                     unsigned long color, const char *s);
+void draw_win_glyph(Window w, int x, int y, int size, unsigned long fg,
+                    unsigned long bg);
 int color_rgb(const char *str, int *r, int *g, int *b);
 
 /* ---------------------------------------------------------------- config.c */
@@ -287,10 +289,14 @@ void update_active_property(void);
 
 void input_grab_keys(void);
 void input_grab_buttons(void);
+void input_grab_client(Window w);
+void input_ungrab_client(Window w);
 void handle_key_press(XKeyEvent *ev);
 void handle_button_press(XButtonEvent *ev);
 void handle_mapping_notify(XMappingEvent *ev);
 void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags);
+void selfdrag_window(Window win, XButtonEvent *ev, int *x, int *y,
+                     int w, int h);
 unsigned int strip_mods(unsigned int state);
 
 /* ---------------------------------------------------------------- panel.c */
@@ -316,6 +322,7 @@ void menu_pointer(XButtonEvent *ev);
 void menu_motion(XMotionEvent *ev);
 void menu_expose(XExposeEvent *ev);
 void desktop_menu_show(XButtonEvent *ev);
+void menu_show_custom(MenuEntry *items, int n, int x, int y);
 
 void cmd_show(void);
 void cmd_hide(void);
@@ -326,6 +333,7 @@ void cmd_expose(XExposeEvent *ev);
 /* ------------------------------------------------------------------- fm.c */
 
 void fm_show(void);
+void fm_show_path(const char *path);
 void fm_hide(void);
 int fm_open(void);
 Window fm_window(void);
@@ -334,5 +342,32 @@ int fm_button(XButtonEvent *ev);
 int fm_motion(XMotionEvent *ev);
 void fm_key(XKeyEvent *ev);
 void fm_cleanup(void);
+
+/* -------------------------------------------------------- security_gui.c */
+
+void security_gui_toggle(void);
+void security_gui_hide(void);
+int security_gui_open(void);
+Window security_gui_window(void);
+void security_gui_redraw(void);
+int security_gui_expose(XExposeEvent *ev);
+int security_gui_button(XButtonEvent *ev);
+int security_gui_motion(XMotionEvent *ev);
+void security_gui_key(XKeyEvent *ev);
+void security_gui_cleanup(void);
+
+/* -------------------------------------------------------------- desktop.c */
+
+void desktop_init(void);
+void desktop_cleanup(void);
+void desktop_refresh(void);
+void desktop_paint(void);
+void desktop_damage(int x, int y, int w, int h);
+void desktop_open(int i);
+int  desktop_command(const char *cmd);
+int  desktop_button(XButtonEvent *ev);
+int  desktop_motion(XMotionEvent *ev);
+int  desktop_expose(XExposeEvent *ev);
+void desktop_root_property(XPropertyEvent *ev);
 
 #endif /* SCDE_H */

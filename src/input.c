@@ -3,7 +3,10 @@
  */
 #include "scde.h"
 
+#include <stdlib.h>
 #include <string.h>
+
+#define DRAG_TEAR_SLOP 6
 
 static unsigned int mods_extra[4];
 
@@ -90,6 +93,35 @@ void input_grab_buttons(void)
     XSync(sc.dpy, False);
 }
 
+/* ---------------------------------------------------------- click to focus */
+
+/* With focus_follows_mouse off there is no other way to focus a window than
+   clicking it: a passive grab on the client window lets us see the press and
+   ReplayPointer then hands it to the application untouched. */
+void input_grab_client(Window w)
+{
+    static const unsigned int mods[] = {
+        0, LockMask, Mod2Mask, LockMask | Mod2Mask
+    };
+    size_t i;
+
+    if (cfg.focus_follows_mouse || w == None)
+        return;
+    for (i = 0; i < sizeof(mods) / sizeof(mods[0]); i++)
+        XGrabButton(sc.dpy, Button1, mods[i], w, False,
+                    ButtonPressMask | ButtonReleaseMask,
+                    GrabModeSync, GrabModeAsync, None, None);
+    XSync(sc.dpy, False);
+}
+
+void input_ungrab_client(Window w)
+{
+    if (w == None)
+        return;
+    XUngrabButton(sc.dpy, Button1, AnyModifier, w);
+    XSync(sc.dpy, False);
+}
+
 /* --------------------------------------------------------------- dragging */
 
 void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
@@ -120,7 +152,36 @@ void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
 
             dx = e.xmotion.x_root - px;
             dy = e.xmotion.y_root - py;
+            if (mode == DRAG_MOVE && c->maximized &&
+                (dx > DRAG_TEAR_SLOP || dx < -DRAG_TEAR_SLOP ||
+                 dy > DRAG_TEAR_SLOP || dy < -DRAG_TEAR_SLOP)) {
+                /* dragging a maximized window tears it off at its old size */
+                int rel_x = px - c->x;
+                int rel_y = py - c->y;
+
+                if (rel_x < 0)
+                    rel_x = 0;
+                if (rel_y < 0)
+                    rel_y = 0;
+                client_maximize(c, 0);
+                if (rel_x > c->w)
+                    rel_x = c->w;
+                if (rel_y > c->title_h + c->h)
+                    rel_y = c->title_h;
+                fx0 = c->x;
+                fy0 = c->y;
+                w0 = c->w;
+                h0 = c->h;
+                px = c->x + rel_x;
+                py = c->y + rel_y;
+                dx = e.xmotion.x_root - px;
+                dy = e.xmotion.y_root - py;
+            }
             if (mode == DRAG_MOVE) {
+                int ox = c->x, oy = c->y;
+                int ow = c->w + 2 * c->bw;
+                int oh = frame_h(c);
+
                 c->x = fx0 + dx;
                 c->y = fy0 + dy;
                 {
@@ -137,6 +198,8 @@ void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
                         c->y = sc.sh - 32;
                 }
                 XMoveWindow(sc.dpy, c->frame, c->x, c->y);
+                if (c->x != ox || c->y != oy)
+                    desktop_damage(ox, oy, ow, oh);  /* icons under it */
             } else {
                 int ph = panel_reserved();
                 int max_bottom = sc.sh - ph;
@@ -184,11 +247,20 @@ void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
                 if (c->maximized)
                     c->maximized = 0;
 
-                c->x = nx;
-                c->y = ny;
-                c->w = nw;
-                c->h = nh;
-                frame_sync(c);
+                {
+                    int ox = c->x, oy = c->y;
+                    int ow = c->w + 2 * c->bw;
+                    int oh = frame_h(c);
+
+                    c->x = nx;
+                    c->y = ny;
+                    c->w = nw;
+                    c->h = nh;
+                    frame_sync(c);
+                    if (c->x != ox || c->y != oy ||
+                        c->w + 2 * c->bw != ow || frame_h(c) != oh)
+                        desktop_damage(ox, oy, ow, oh);
+                }
             }
         } else if (e.type == ButtonRelease) {
             break;
@@ -232,6 +304,85 @@ void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
     XFlush(sc.dpy);
 }
 
+/*
+ * Modal title-bar drag for the self-managed (override-redirect) windows -
+ * file manager, Security Center.  Same event routing as start_drag so
+ * expose/panel/menu events keep working while the pointer is grabbed, and
+ * the desktop region under the old window position is damaged on every
+ * move so icons reappear immediately.
+ */
+void selfdrag_window(Window win, XButtonEvent *ev, int *x, int *y,
+                     int w, int h)
+{
+    XEvent e, last;
+    int px = ev->x_root;
+    int py = ev->y_root;
+    int x0 = *x, y0 = *y;
+    int lim = w > 64 ? w - 64 : 16;
+
+    if (XGrabPointer(sc.dpy, sc.root, False,
+                     ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                     GrabModeAsync, GrabModeAsync, None, sc.cur_move,
+                     ev->time) != GrabSuccess)
+        return;
+
+    memset(&last, 0, sizeof(last));
+    for (;;) {
+        XNextEvent(sc.dpy, &e);
+
+        if (e.type == MotionNotify) {
+            int nx, ny;
+
+            while (XCheckMaskEvent(sc.dpy, PointerMotionMask, &last))
+                e = last;
+            nx = x0 + (e.xmotion.x_root - px);
+            ny = y0 + (e.xmotion.y_root - py);
+            if (nx < -lim)
+                nx = -lim;
+            if (nx > sc.sw - 64)
+                nx = sc.sw - 64;
+            if (ny < 0)
+                ny = 0;
+            if (ny > sc.sh - 32)
+                ny = sc.sh - 32;
+            if (nx != *x || ny != *y) {
+                XMoveWindow(sc.dpy, win, nx, ny);
+                desktop_damage(*x, *y, w, h);    /* area it just left */
+                *x = nx;
+                *y = ny;
+            }
+        } else if (e.type == ButtonRelease) {
+            break;
+        } else if (e.type == Expose) {
+            handle_expose(&e.xexpose);           /* root included now */
+        } else if (e.type == MotionNotify &&
+                   e.xmotion.window == sc.panel) {
+            panel_motion(&e.xmotion);
+        } else if (e.type == MotionNotify &&
+                   e.xmotion.window == sc.menu) {
+            menu_motion(&e.xmotion);
+        } else if (e.type == ConfigureRequest) {
+            handle_configure_request(&e.xconfigurerequest);
+        } else if (e.type == MapRequest) {
+            handle_map_request(&e.xmaprequest);
+        } else if (e.type == DestroyNotify) {
+            handle_destroy_notify(&e.xdestroywindow);
+        } else if (e.type == UnmapNotify) {
+            handle_unmap_notify(&e.xunmap);
+        } else if (e.type == PropertyNotify) {
+            handle_property_notify(&e.xproperty);
+        } else if (e.type == ClientMessage) {
+            handle_client_message(&e.xclient);
+        } else if (e.type == EnterNotify) {
+            handle_enter_notify(&e.xcrossing);
+        }
+        /* extra ButtonPress/KeyPress during the grab are swallowed */
+    }
+
+    XUngrabPointer(sc.dpy, CurrentTime);
+    XFlush(sc.dpy);
+}
+
 /* ------------------------------------------------------------------ keys */
 
 void handle_key_press(XKeyEvent *ev)
@@ -243,6 +394,10 @@ void handle_key_press(XKeyEvent *ev)
 
     if (msgbox_key(ev))
         return;
+    if (security_gui_open() && ev->window == security_gui_window()) {
+        security_gui_key(ev);
+        return;
+    }
     if (fm_open() && ev->window == fm_window()) {
         fm_key(ev);
         return;
@@ -316,6 +471,8 @@ void handle_button_press(XButtonEvent *ev)
 
     if (msgbox_button(ev))
         return;
+    if (security_gui_button(ev))
+        return;
     if (fm_button(ev))
         return;
     Window child = None;
@@ -332,6 +489,17 @@ void handle_button_press(XButtonEvent *ev)
     }
     if (cmd_is_open() && ev->window == sc.cmd) {
         cmd_hide();
+        return;
+    }
+    if (client_find(ev->window) != NULL) {
+        /* click-to-focus grab on the client window: focus, then let the
+           application process the press as if we were not there */
+        Client *fc = client_find(ev->window);
+
+        if (!fc->minimized)
+            focus_client(fc);
+        if (!cfg.focus_follows_mouse)
+            XAllowEvents(sc.dpy, ReplayPointer, ev->time);
         return;
     }
     if (ev->window == sc.root) {
@@ -356,6 +524,8 @@ void handle_button_press(XButtonEvent *ev)
                            DIR_UP | DIR_DOWN | DIR_LEFT | DIR_RIGHT);
             return;
         }
+        if (desktop_button(ev))
+            return;
         if (ev->button == Button3) {
             desktop_menu_show(ev);           /* right click on the desktop */
             return;
