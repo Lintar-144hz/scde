@@ -577,36 +577,48 @@ static int copy_file(const char *src, const char *dst, mode_t mode)
     int in;
     int out;
     ssize_t got;
+    size_t total = 0;
 
-    in = open(src, O_RDONLY);
+    /* O_NOFOLLOW on both ends: never read through or write through a link
+       an attacker may have planted */
+    in = open(src, O_RDONLY | O_NOFOLLOW);
     if (in < 0)
         return -1;
-    out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, mode);
     if (out < 0) {
         close(in);
         return -1;
     }
     while ((got = read(in, buf, sizeof(buf))) > 0) {
-        if (got > XAUTH_STAGED_MAX) {
+        total += (size_t)got;
+        if (total > XAUTH_STAGED_MAX) {
             close(in);
             close(out);
+            unlink(dst);
             return -1;
         }
         if (write(out, buf, (size_t)got) != got) {
             close(in);
             close(out);
+            unlink(dst);
             return -1;
         }
     }
     close(in);
     close(out);
-    return got < 0 ? -1 : 0;
+    if (got < 0) {
+        unlink(dst);
+        return -1;
+    }
+    return 0;
 }
 
 static void stage_xauth(void)
 {
     const char *xa = getenv("XAUTHORITY");
     struct stat st;
+    char tmpl[64];
+    int tmpfd;
 
     staged_xauth[0] = '\0';
     xauth_dest[0] = '\0';
@@ -615,10 +627,19 @@ static void stage_xauth(void)
         return;
     snprintf(xauth_dest, sizeof(xauth_dest), "%.*s",
              (int)(sizeof(xauth_dest) - 1), xa);
-    snprintf(staged_xauth, sizeof(staged_xauth), "/tmp/.scde-xauth-%ld",
-             (long)getpid());
-    if (copy_file(xa, staged_xauth, 0600) != 0)
-        staged_xauth[0] = '\0';
+    /* mkstemp creates the staging file atomically (O_EXCL, 0600): a
+       pre-planted symlink or regular file can never hijack the copy */
+    snprintf(tmpl, sizeof(tmpl), "/tmp/.scde-xauth-XXXXXX");
+    tmpfd = mkstemp(tmpl);
+    if (tmpfd < 0)
+        return;
+    close(tmpfd);
+    if (copy_file(xa, tmpl, 0600) != 0) {
+        unlink(tmpl);
+        return;
+    }
+    snprintf(staged_xauth, sizeof(staged_xauth), "%.*s",
+             (int)(sizeof(staged_xauth) - 1), tmpl);
 }
 
 static void make_parents(const char *path)

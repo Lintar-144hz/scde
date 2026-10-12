@@ -138,12 +138,12 @@ static int match_query(const char *label, const char *q)
     return 0;
 }
 
-/* muted, desaturated tile colours - calm, never neon */
+/* muted Harbor tile tones: slate blue-grey family, calm, never neon */
 static unsigned long tile_color(const char *name)
 {
     static const unsigned long pal[] = {
-        0x46617aUL, 0x4a7264UL, 0x635e7eUL, 0x74674eUL,
-        0x556b78UL, 0x6f5f5fUL, 0x566e63UL
+        0x46586eUL, 0x4c6272UL, 0x565d75UL, 0x5d6a72UL,
+        0x4a5a6bUL, 0x60606aUL, 0x54687aUL
     };
     unsigned int h = 0;
 

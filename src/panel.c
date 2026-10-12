@@ -1,5 +1,5 @@
 /*
- * SCDE - panel (Windows style): Start button, task manager, tray, clock
+ * SCDE - panel (Harbor style): launcher mark, task manager, tray, clock
  */
 #include "scde.h"
 
@@ -17,7 +17,7 @@
 #define BTN_CLOSE_W 16
 
 typedef struct {
-    Client *c;
+    int task;                 /* index into the taskbar registry */
     int x, w;
 } PanelBtn;
 
@@ -39,6 +39,21 @@ static int tray_draw, clock_draw;
 static unsigned long dim_color(unsigned long fg, unsigned long bg)
 {
     return (((fg & 0xfefefeUL) >> 1) + ((bg & 0xfefefeUL) >> 1));
+}
+
+/* rounded chip: a plain rect with the corners cut back to the panel bg -
+   the cheapest dock feel without a compositor (paint happens on the panel,
+   so the untouched corners simply keep the panel colour) */
+static void chip(Window w, int x, int y, int wd, int hg, int cut,
+                 unsigned long fg)
+{
+    if (wd <= 2 * cut || hg <= 2 * cut || cut < 1)
+        return;
+    XSetForeground(sc.dpy, sc.gc, fg);
+    XFillRectangle(sc.dpy, w, sc.gc, x + cut, y, (unsigned)(wd - 2 * cut),
+                   (unsigned)hg);
+    XFillRectangle(sc.dpy, w, sc.gc, x, y + cut, (unsigned)wd,
+                   (unsigned)(hg - 2 * cut));
 }
 
 int panel_reserved(void)
@@ -81,11 +96,17 @@ static void icon_launcher(int y0)
 
     x0 = cx - s - g / 2;
     y0i = cy - s - g / 2;
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);   /* accent logo */
+    /* Harbor mark: four calm tiles with a soft top edge, not flat neon */
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
     for (i = 0; i < 2; i++)
         for (j = 0; j < 2; j++)
             XFillRectangle(sc.dpy, sc.panel, sc.gc, x0 + i * (s + g),
                            y0i + j * (s + g), (unsigned)s, (unsigned)s);
+    XSetForeground(sc.dpy, sc.gc, cfg.col_title_fg);
+    for (i = 0; i < 2; i++)
+        for (j = 0; j < 2; j++)
+            XFillRectangle(sc.dpy, sc.panel, sc.gc, x0 + i * (s + g),
+                           y0i + j * (s + g), (unsigned)s, 1);
 }
 
 static void icon_network(int x, int cy, unsigned long fg, unsigned long bg)
@@ -203,10 +224,14 @@ void panel_raise(void)
 void panel_update(void)
 {
     int y0, x, i, avail, n, w, shown, right;
-    Client *c;
 
     if (!sc.panel)
         return;
+
+    /* single taskbar registry: managed clients first (mapping order),
+       then the registered internal application windows */
+    taskbar_sync();
+    n = taskbar_count();
 
     y0 = 0;
     clock_str[0] = '\0';
@@ -239,12 +264,10 @@ void panel_update(void)
     XFillRectangle(sc.dpy, sc.panel, sc.gc, 0, 0, (unsigned)sc.panel_w,
                    (unsigned)cfg.panel_height);
 
-    /* launcher */
+    /* launcher: rounded dock chip on hover, quiet mark */
     if (hover_launcher) {
-        XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
-        XFillRectangle(sc.dpy, sc.panel, sc.gc, 2, 2,
-                       (unsigned)(LAUNCHER_W - 4),
-                       (unsigned)(cfg.panel_height - 4));
+        chip(sc.panel, 3, y0 + 2, LAUNCHER_W - 6, cfg.panel_height - 4, 3,
+             cfg.col_btn_hover);
     }
     icon_launcher(y0);
     XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
@@ -257,10 +280,6 @@ void panel_update(void)
     avail = right - x;
     if (avail < 0)
         avail = 0;
-
-    n = 0;
-    for (c = sc.clients; c && n < MAX_PANEL_BTNS; c = c->next)
-        n++;
 
     shown = n;
     w = BTN_MAX_W;
@@ -287,50 +306,75 @@ void panel_update(void)
     }
 
     nbtns = 0;
-    for (c = sc.clients, i = 0; c && i < shown; c = c->next, i++) {
+    for (i = 0; i < shown; i++) {
+        const TaskEntry *t = taskbar_at(i);
         char label[NAME_MAX_LEN];
-        int active = (c == sc.focused);
+        int active;
         unsigned long bg;
         unsigned long fg;
+        unsigned long glyph_fg;
         int bl;
+
+        if (!t)
+            break;
+        active = t->focused;
 
         if (x + 2 >= right)
             break;
-        btns[nbtns].c = c;
+        btns[nbtns].task = i;
         btns[nbtns].x = x;
         btns[nbtns].w = w;
         nbtns++;
 
-        /* Windows style: transparent until hovered, a thin underline for
-           every running window and the accent bar for the focused one */
+        /* macOS dock: rounded tile until hovered / focused, plus a small
+           running dot under the app mark (accent for the focused one) */
         bg = 0;
         if (active)
             bg = cfg.col_btn_active;
         else if (i == hover_task)
             bg = cfg.col_btn_hover;
-        if (bg) {
-            XSetForeground(sc.dpy, sc.gc, bg);
-            XFillRectangle(sc.dpy, sc.panel, sc.gc, x, y0 + 2,
-                           (unsigned)(w - 4),
-                           (unsigned)(cfg.panel_height - 4));
+        if (bg)
+            chip(sc.panel, x + 1, y0 + 3, w - 5, cfg.panel_height - 6, 3,
+                 bg);
+        {
+            unsigned long dc;
+
+            if (active)
+                dc = cfg.col_border_focus;
+            else if (t->hidden)
+                dc = dim_color(cfg.col_panel_fg, bg ? bg : cfg.col_panel_bg);
+            else
+                dc = cfg.col_panel_fg;
+            XSetForeground(sc.dpy, sc.gc, dc);
+            XFillArc(sc.dpy, sc.panel, sc.gc, x + 11,
+                     y0 + cfg.panel_height - 9, 5, 5, 0, 360 * 64);
         }
-        XSetForeground(sc.dpy, sc.gc,
-                       active ? cfg.col_border_focus
-                              : dim_color(cfg.col_panel_fg, cfg.col_panel_bg));
-        XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 2,
-                       y0 + cfg.panel_height - 3, (unsigned)(w - 8), 3);
 
         bl = baseline(y0);
         if (active)
-            fg = 0xffffffUL;
-        else if (c->minimized)
+            fg = 0xedf0f5UL;
+        else if (t->hidden)
             fg = dim_color(cfg.col_panel_fg, bg ? bg : cfg.col_panel_bg);
         else
             fg = cfg.col_panel_fg;
 
-        /* mini application icon left of the label */
-        draw_win_glyph(sc.panel, x + 6, y0 + (cfg.panel_height - 14) / 2, 14,
-                       fg, bg ? bg : cfg.col_panel_bg);
+        /* mini application mark left of the label: internal applications
+           get their own calm tone so File Manager / SCDE Security read
+           as separate apps, not duplicates of a client window */
+        if (t->app_type == TASK_APP_FM)
+            glyph_fg = 0xd9a84eUL;
+        else if (t->app_type == TASK_APP_SECURITY)
+            glyph_fg = 0x7c9cbfUL;
+        else
+            glyph_fg = fg;
+        {
+            int gy = y0 + (cfg.panel_height - 14) / 2;
+
+            if (cfg.panel_height >= 26)
+                gy -= 3;                 /* room for the running dot below */
+            draw_win_glyph(sc.panel, x + 6, gy, 14, glyph_fg,
+                           bg ? bg : cfg.col_panel_bg);
+        }
         {
             int bi = nbtns - 1;
             int has_close = w >= 64;
@@ -338,7 +382,7 @@ void panel_update(void)
 
             label[0] = '\0';
             if (room > 0)
-                fit_text(label, sizeof(label), c->name, room);
+                fit_text(label, sizeof(label), t->title, room);
             draw_text(sc.panel, x + 26, bl, fg, label);
 
             /* close (X) at the right end of a wide enough task button */
@@ -353,7 +397,7 @@ void panel_update(void)
                     XFillRectangle(sc.dpy, sc.panel, sc.gc, zx, zy,
                                    (unsigned)BTN_CLOSE_W, (unsigned)zh);
                 }
-                XSetForeground(sc.dpy, sc.gc, on ? 0xffffffUL : fg);
+                XSetForeground(sc.dpy, sc.gc, on ? 0xedf0f5UL : fg);
                 {
                     int cx = zx + BTN_CLOSE_W / 2;
                     int cy = zy + zh / 2;
@@ -452,8 +496,13 @@ void panel_update(void)
         }
     }
 
+    /* Harbor hairline on the desktop-facing edge, quiet separation */
     XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawLine(sc.dpy, sc.panel, sc.gc, 0, 0, sc.sw, 0);
+    if (cfg.panel_top)
+        XDrawLine(sc.dpy, sc.panel, sc.gc, 0, cfg.panel_height - 1, sc.sw,
+                  cfg.panel_height - 1);
+    else
+        XDrawLine(sc.dpy, sc.panel, sc.gc, 0, 0, sc.sw, 0);
 }
 
 void panel_expose(XExposeEvent *ev)
@@ -486,13 +535,11 @@ int panel_button_press(XButtonEvent *ev)
                 int zx = btns[i].x + btns[i].w - 4 - BTN_CLOSE_W;
 
                 if (ev->x >= zx && ev->x < zx + BTN_CLOSE_W) {
-                    close_client(btns[i].c);
+                    taskbar_close(btns[i].task);
                     return 1;
                 }
             }
-            if (btns[i].c->minimized)
-                client_minimize(btns[i].c, 0);
-            focus_client(btns[i].c);
+            taskbar_activate(btns[i].task);
             return 1;
         }
     }

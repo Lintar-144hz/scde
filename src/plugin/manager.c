@@ -323,7 +323,10 @@ int scde_plugins_load(const char *path)
     }
 
     err[0] = '\0';
-    st = scde_loader_open(path, &e->loaded, err, sizeof(err));
+    /* open the resolved path the gate actually validated, not the
+       (possibly symlinked) caller-supplied path: otherwise the link could
+       be swapped between the security check and dlopen */
+    st = scde_loader_open(gpath, &e->loaded, err, sizeof(err));
     if (st != SCDE_OK) {
         fail_entry(e, idx, st, err, "invalid plugin");
         return st;

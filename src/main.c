@@ -189,6 +189,7 @@ static void setup_atoms(void)
     sc.atom_net_supported = XInternAtom(sc.dpy, "_NET_SUPPORTED", False);
     sc.atom_net_supporting_wm_check =
         XInternAtom(sc.dpy, "_NET_SUPPORTING_WM_CHECK", False);
+    sc.atom_scde_task_list = XInternAtom(sc.dpy, "_SCDE_TASK_LIST", False);
 }
 
 /* announce the EWMH hints we implement (lets tools such as xdotool see us) */
@@ -270,6 +271,32 @@ static void setup_wallpaper(void)
         px = (unsigned long)r << 16 | (unsigned long)g << 8 | (unsigned long)b;
         XSetForeground(sc.dpy, wgc, px);
         XFillRectangle(sc.dpy, wallpaper_pm, wgc, 0, y, (unsigned)sc.sw, 1);
+    }
+    /* Harbor signature: two nested hairline ellipses, slightly lighter
+     * than the gradient, for a calm abstract depth.  Painted once into
+     * the pixmap (no runtime cost, no compositor).  A flat theme
+     * (top == bottom, as the tests use) stays exactly flat. */
+    if (cfg.col_wallpaper_top != cfg.col_wallpaper_bottom) {
+        int lr = r1 + 14 > 255 ? 255 : r1 + 14;
+        int lg = g1 + 14 > 255 ? 255 : g1 + 14;
+        int lb = b1 + 14 > 255 ? 255 : b1 + 14;
+        unsigned long lp =
+            (unsigned long)lr << 16 | (unsigned long)lg << 8 | (unsigned long)lb;
+        int mr = r1 + 7 > 255 ? 255 : r1 + 7;
+        int mg = g1 + 7 > 255 ? 255 : g1 + 7;
+        int mb = b1 + 7 > 255 ? 255 : b1 + 7;
+        unsigned long mp =
+            (unsigned long)mr << 16 | (unsigned long)mg << 8 | (unsigned long)mb;
+        int ex = -sc.sw / 10, ey = -sc.sh / 12;
+        int ew = sc.sw + sc.sw / 5, eh = sc.sh + sc.sh / 6;
+
+        XSetForeground(sc.dpy, wgc, mp);
+        XDrawArc(sc.dpy, wallpaper_pm, wgc, ex, ey, (unsigned)ew,
+                 (unsigned)eh, 0, 360 * 64);
+        XSetForeground(sc.dpy, wgc, lp);
+        XDrawArc(sc.dpy, wallpaper_pm, wgc, ex + sc.sw / 16, ey + sc.sh / 22,
+                 (unsigned)(ew - sc.sw / 8), (unsigned)(eh - sc.sh / 11), 0,
+                 360 * 64);
     }
     XFreeGC(sc.dpy, wgc);
     XSetWindowBackgroundPixmap(sc.dpy, sc.root, wallpaper_pm);
@@ -488,6 +515,7 @@ static void cleanup(void)
     }
 
     XDeleteProperty(sc.dpy, sc.root, sc.atom_net_client_list);
+    XDeleteProperty(sc.dpy, sc.root, sc.atom_scde_task_list);
     XDeleteProperty(sc.dpy, sc.root, sc.atom_net_active);
     XDeleteProperty(sc.dpy, sc.root, sc.atom_net_supported);
     XDeleteProperty(sc.dpy, sc.root, sc.atom_net_supporting_wm_check);
@@ -534,8 +562,9 @@ static void usage(int code)
            "  Alt+F2        run a command         Alt+Space    application menu\n"
            "  Alt+L-drag    move window           Alt+R-drag   resize window\n"
            "  Alt+Enter     start terminal        Alt+E        file manager\n"
-           "  Alt+Up        maximize              Alt+Down     minimize\n"
-           "  Alt+Left/Right  snap half screen    Alt+D        show desktop\n"
+           "  Alt+S         security center       Alt+Up       maximize\n"
+           "  Alt+Down      minimize              Alt+Left/Right snap halves\n"
+           "  Alt+D         show desktop\n"
            "  right click desktop   desktop menu\n"
            "\n"
            "desktop shortcuts:\n"

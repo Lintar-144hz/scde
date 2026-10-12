@@ -642,7 +642,7 @@ static void elf_scan(int fd, off_t size, const unsigned char *hdr, acc_t *a,
     phent = rd16(hdr + (is64 ? 54 : 42), big);
     phnum = rd16(hdr + (is64 ? 56 : 44), big);
 
-    if (phnum > 96 || phent < (is64 ? 56u : 32u) ||
+    if (phent < (is64 ? 56u : 32u) || phnum > 96 ||
         phoff + (uint64_t)phnum * phent > (uint64_t)size) {
         acc_add(a, G_ELF, 35, SCDE_REASON_ELF);
         return;
@@ -651,7 +651,13 @@ static void elf_scan(int fd, off_t size, const unsigned char *hdr, acc_t *a,
         return;
     if (phnum > 64)
         phnum = 64;
-    if (!read_at(fd, (off_t)phoff, ph, (size_t)phnum * phent)) {
+    if ((size_t)phnum * phent > sizeof(ph)) {
+        if (phent > 0)
+            phnum = (uint16_t)(sizeof(ph) / phent);
+        else
+            phnum = 0;
+    }
+    if (phnum == 0 || !read_at(fd, (off_t)phoff, ph, (size_t)phnum * phent)) {
         acc_add(a, G_ELF, 35, SCDE_REASON_ELF);
         return;
     }
@@ -1175,6 +1181,9 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
     int score;
     int best_reason = SCDE_REASON_NONE;
     int mode;
+    int is_link = 0;
+    off_t read_size = 0;
+    char link_target[SCDE_PATH_MAX];
 
     if (!path || !result)
         return SCDE_ERR_ARG;
@@ -1188,6 +1197,7 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
 
     scde__ensure();
     mode = scde_security_get_scan_mode();
+    link_target[0] = '\0';
     if (mode == SCDE_SCAN_OFF) {
         r.flags |= SCDE_SCANFLAG_SKIPPED;
         r.hash_status = SCDE_HASH_SKIPPED;
@@ -1215,8 +1225,11 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
         return SCDE_ERR_NOT_FOUND;
     }
 
-    /* cache: path + size + mtime */
-    if (cache_lookup(path, &st, &r)) {
+    /* cache: path + size + mtime.  Symlinks are never cached: the result
+       depends on the (mutable, possibly swapped) target while the key
+       would only cover the link itself - a stale SAFE verdict otherwise. */
+    is_link = S_ISLNK(st.st_mode) ? 1 : 0;
+    if (!is_link && cache_lookup(path, &st, &r)) {
         scde__stats()->cache_hits++;
         *result = r;
         return SCDE_OK;
@@ -1249,10 +1262,16 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
             acc_add(&a, G_SYMLINK, 40, SCDE_REASON_SYMLINK);
             if (sensitive_target(resolved) || strstr(target, "..") != NULL)
                 acc_add(&a, G_SYMLINK, 45, SCDE_REASON_SYMLINK);
-            if (stat(path, &target_st) == 0 && S_ISREG(target_st.st_mode))
+            if (stat(path, &target_st) == 0 && S_ISREG(target_st.st_mode)) {
                 ps = &target_st;
-            else
+                /* read the content through the resolved target (single
+                   level only: open() below uses O_NOFOLLOW so a chained
+                   link fails closed instead of being followed) */
+                snprintf(link_target, sizeof(link_target), "%.*s",
+                         (int)(sizeof(link_target) - 1), resolved);
+            } else {
                 acc_add(&a, G_SYMLINK, 30, SCDE_REASON_SYMLINK);
+            }
         }
     } else if (!S_ISREG(st.st_mode)) {
         r.status = SCDE_THREAT_UNKNOWN;
@@ -1287,12 +1306,29 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
     if (path_group_for(path, exec_bit || ext_is_exec(path)))
         acc_add(&a, G_PATH, 20, SCDE_REASON_PATH);
 
-    /* type inspection from the first bytes */
-    fd = open(path, O_RDONLY | O_NOFOLLOW);
+    /* type inspection from the first bytes.  Symlinks are read through the
+       resolved target captured above; the result is never cached, so a
+       swapped target is always re-read on the next scan. */
+    fd = open(is_link && link_target[0] ? link_target : path,
+              O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
         acc_add(&a, G_TYPE, 30, SCDE_REASON_IO);
         snprintf(detail, sizeof(detail), "cannot read");
     } else {
+        struct stat fd_st;
+
+        read_size = ps->st_size;
+        /* size from the descriptor we actually read, not from the
+           earlier stat: the target may have changed in between */
+        if (fstat(fd, &fd_st) == 0 && S_ISREG(fd_st.st_mode)) {
+            read_size = fd_st.st_size;
+        } else {
+            close(fd);
+            fd = -1;
+            acc_add(&a, G_TYPE, 30, SCDE_REASON_IO);
+            snprintf(detail, sizeof(detail), "cannot read");
+        }
+        if (fd >= 0) {
         ssize_t hn = pread(fd, head, sizeof(head), 0);
         size_t n = hn > 0 ? (size_t)hn : 0;
 
@@ -1300,7 +1336,7 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
             head[3] == 'F') {
             is_elf = 1;
             r.flags |= SCDE_SCANFLAG_ELF;
-            elf_scan(fd, ps->st_size, head, &a, path, exec_bit);
+            elf_scan(fd, read_size, head, &a, path, exec_bit);
             a.deep = 1;
         } else if (n >= 2 && head[0] == '#' && head[1] == '!') {
             is_script = 1;
@@ -1320,11 +1356,14 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
             }
         }
 
-        /* content rules: scripts, or any small text file */
-        if (!is_elf && n > 0 && looks_text(head, n) &&
-            ps->st_size <= (off_t)DEEP_SIZE_MAX) {
+        /* content rules: scripts, or any small text file.  A shebang file
+           is always worth the rules - even when it contains NUL bytes
+           (which would otherwise evade every signature) or non-ASCII
+           text that fails the plain-text heuristic. */
+        if (!is_elf && n > 0 && (looks_text(head, n) || is_script) &&
+            read_size <= (off_t)DEEP_SIZE_MAX) {
             static unsigned char body[DEEP_SIZE_MAX + 1];
-            size_t total = (size_t)ps->st_size;
+            size_t total = (size_t)read_size;
             ssize_t got;
 
             if (is_script)
@@ -1334,21 +1373,24 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
             got = pread(fd, body, total, 0);
             if (got > 0) {
                 body[got] = '\0';
+                if (is_script && !looks_text(body, (size_t)got))
+                    acc_add(&a, G_TYPE, 20, SCDE_REASON_TYPE);
                 if (is_script || exec_bit || n_db_rules > 0 ||
                     r.flags & SCDE_SCANFLAG_SYMLINK)
                     script_scan(body, (size_t)got, &a, detail,
                                 sizeof(detail));
             }
         }
+        } /* end if (fd >= 0): content only from a verified descriptor */
     }
 
     /* hash + threat intelligence */
-    if ((uint64_t)ps->st_size <= SCAN_SIZE_MAX && fd >= 0) {
+    if (read_size >= 0 && (uint64_t)read_size <= SCAN_SIZE_MAX && fd >= 0) {
         sha256_ctx ctx;
         unsigned char io[8192];
         ssize_t got;
         off_t off = 0;
-        size_t total = (size_t)ps->st_size;
+        size_t total = (size_t)read_size;
 
         sha256_init(&ctx);
         while ((size_t)off < total) {
@@ -1429,7 +1471,8 @@ int scde_scan_file(const char *path, scde_scan_result_t *result)
     if (r.status == SCDE_THREAT_BLOCKED)
         scde_audit_log(SCDE_AUDIT_THREAT_BLOCKED, path, score, r.detail);
 
-    cache_store(path, &st, &r);
+    if (!is_link)
+        cache_store(path, &st, &r);
     *result = r;
     return SCDE_OK;
 }
@@ -1640,7 +1683,7 @@ static void handle_watch(const char *dir, const char *name, uint32_t mask)
     n = snprintf(path, sizeof(path), "%s/%s", dir, name);
     if (n <= 0 || (size_t)n >= sizeof(path))
         return;
-    if (mask & IN_DELETE) {
+    if (mask & (IN_DELETE | IN_MOVED_FROM)) {
         cache_drop(path);
         return;
     }

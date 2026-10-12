@@ -16,6 +16,46 @@
 /* internal: subject of the most recent security exec gate (core.c) */
 const char *scde__last_exec_subject(void);
 
+/*
+ * Publish the window that owns the X input focus on the root window.  A
+ * single tracked value (sc.focus_win) keeps the property in step with the
+ * focus we actually set - for managed clients and our own application
+ * windows alike.
+ */
+void update_active_property(void)
+{
+    if (!sc.dpy || sc.root == None || sc.atom_net_active == None)
+        return;
+    if (sc.focus_win == None)
+        XDeleteProperty(sc.dpy, sc.root, sc.atom_net_active);
+    else
+        XChangeProperty(sc.dpy, sc.root, sc.atom_net_active, XA_WINDOW, 32,
+                        PropModeReplace, (unsigned char *)&sc.focus_win, 1);
+}
+
+/*
+ * Set the X input focus and remember which window owns it, so the taskbar
+ * can mark exactly one entry as focused.  Every internal focus grab must
+ * go through here instead of calling XSetInputFocus() directly.
+ */
+void focus_track(Window w)
+{
+    if (!sc.dpy)
+        return;
+    sc.focus_win = w;
+    XSetInputFocus(sc.dpy, w, RevertToPointerRoot, CurrentTime);
+    update_active_property();            /* single source of truth */
+}
+
+/* focus is leaving w (window hidden/closed): forget it and republish */
+void focus_drop(Window w)
+{
+    if (sc.focus_win != w)
+        return;
+    sc.focus_win = None;
+    update_active_property();
+}
+
 void log_msg(const char *fmt, ...)
 {
     va_list ap;
@@ -329,19 +369,30 @@ void draw_text_clip(Window w, int x, int max_x, int baseline_y,
 }
 
 /*
- * Mini "application window" glyph: a filled square with a highlighted title
- * strip on top.  Used for the title bar icon and the task bar buttons so a
- * window always shows an icon without needing X icon hints from the client.
+ * SCDE Harbor app mark: a calm rounded-square window with a quiet title
+ * strip.  Used for the title bar icon and the task bar buttons so a
+ * window always shows an icon without needing X icon hints from the
+ * client.  Corners are cut by 2 px (no compositor needed) for a soft,
+ * modern feel; geometry stays a plain square so hit-testing is unchanged.
  */
 void draw_win_glyph(Window w, int x, int y, int size, unsigned long fg,
                     unsigned long bg)
 {
+    int cut = size > 12 ? 2 : 1;
+
     if (size < 6)
         return;
     XSetForeground(sc.dpy, sc.gc, bg);
     XFillRectangle(sc.dpy, w, sc.gc, x, y, (unsigned)size, (unsigned)size);
+    /* body with cut corners */
     XSetForeground(sc.dpy, sc.gc, fg);
-    XFillRectangle(sc.dpy, w, sc.gc, x + 1, y + 1, (unsigned)(size - 2), 3);
-    XDrawRectangle(sc.dpy, w, sc.gc, x, y, (unsigned)(size - 1),
-                   (unsigned)(size - 1));
+    XFillRectangle(sc.dpy, w, sc.gc, x + cut, y,
+                   (unsigned)(size - 2 * cut), (unsigned)size);
+    XFillRectangle(sc.dpy, w, sc.gc, x, y + cut, (unsigned)size,
+                   (unsigned)(size - 2 * cut));
+    /* quiet title strip, inset so the mark reads as a window */
+    XSetForeground(sc.dpy, sc.gc, bg);
+    XFillRectangle(sc.dpy, w, sc.gc, x + 2, y + 2, (unsigned)(size - 4), 3);
+    XSetForeground(sc.dpy, sc.gc, fg);
+    XFillRectangle(sc.dpy, w, sc.gc, x + 2, y + 2, (unsigned)(size - 4), 1);
 }

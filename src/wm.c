@@ -1,5 +1,5 @@
 /*
- * SCDE - window management (reparented frames with a Windows style title bar)
+ * SCDE - window management (reparented frames with a calm Harbor title bar)
  */
 #include "scde.h"
 
@@ -78,7 +78,7 @@ void frame_sync(Client *c)
 
 /* ---------------------------------------------------------- title bar art */
 
-/* width of one title-bar button: Windows style (46 px), shrinking on very
+/* width of one title-bar button: Harbor style (46 px), shrinking on very
    narrow windows instead of dropping the buttons all (0 = no room) */
 static int title_btn_w(int W)
 {
@@ -89,11 +89,26 @@ static int title_btn_w(int W)
     return bw < 14 ? 0 : bw;
 }
 
+/* muted traffic-light tones: SCDE clay / amber / sage, never neon.
+   Cell order is macOS-like: close, minimise, maximise (left to right). */
+static unsigned long title_btn_color(int i)
+{
+    switch (i) {
+    case BTN_CLOSE: return 0xc07a7aUL;
+    case BTN_MIN:   return 0xc9a86aUL;
+    default:        return 0x7fb08aUL;
+    }
+}
+
+/* blend a colour toward another by 50% (dim the dots on inactive titles) */
+static unsigned long blend50(unsigned long a, unsigned long b)
+{
+    return (((a & 0xfefefeUL) >> 1) + ((b & 0xfefefeUL) >> 1));
+}
+
 void frame_paint(Client *c)
 {
     int W, th, i, bw;
-    int icon_w = 15;
-    int have_icon;
     unsigned long bg, fg;
 
     if (c->frame == None || c->fullscreen || c->minimized)
@@ -104,69 +119,71 @@ void frame_paint(Client *c)
     bg = sc.focused == c ? cfg.col_title_bg : cfg.col_title_bg_inactive;
     fg = sc.focused == c ? cfg.col_title_fg : cfg.col_title_fg_inactive;
     bw = title_btn_w(W);
-    have_icon = th >= 18 && W - bw * 3 > icon_w + 24;
 
     XSetForeground(sc.dpy, sc.gc, bg);
     XFillRectangle(sc.dpy, c->frame, sc.gc, 0, 0, (unsigned)W, (unsigned)th);
+    /* Harbor top highlight: one quiet lighter line for depth, no gradient */
+    XSetForeground(sc.dpy, sc.gc, sc.focused == c ? cfg.col_btn_hover
+                                                  : cfg.col_border_unfocus);
+    XFillRectangle(sc.dpy, c->frame, sc.gc, 0, 0, (unsigned)W, 1);
 
-    /* application icon (left) */
-    if (have_icon)
-        draw_win_glyph(c->frame, 8, (th - icon_w) / 2, icon_w, fg, bg);
+    /* window buttons (left side): calm circular chips, close/min/max */
+    for (i = BTN_CLOSE; i >= BTN_MIN && bw > 0; i--) {
+        int cell = i == BTN_CLOSE ? 0 : i == BTN_MIN ? 1 : 2;
+        int bx = cell * bw;
+        int d = th < bw ? th - 6 : bw - 6;
+        int ox, oy, cx, cy;
+        unsigned long col;
 
-    /* window buttons (right side): Windows style glyphs */
-    for (i = BTN_MIN; i <= BTN_CLOSE && bw > 0; i++) {
-        int bx = W - bw * (BTN_CLOSE - i + 1);
-        int cx = bx + bw / 2;
-        int cy = th / 2;
-        unsigned long gf = fg;
-
+        if (d < 8)
+            d = 8;
+        if (d > 18)
+            d = 18;
+        ox = bx + (bw - d) / 2;
+        oy = (th - d) / 2;
+        cx = ox + d / 2;
+        cy = oy + d / 2;
+        col = title_btn_color(i);
+        if (sc.focused != c)
+            col = blend50(col, bg);
+        XSetForeground(sc.dpy, sc.gc, col);
+        XFillArc(sc.dpy, c->frame, sc.gc, ox, oy, (unsigned)d, (unsigned)d,
+                 0, 360 * 64);
         if (c->hover_btn == i) {
-            XSetForeground(sc.dpy, sc.gc,
-                           i == BTN_CLOSE ? cfg.col_close_hover
-                                          : cfg.col_title_hover);
-            XFillRectangle(sc.dpy, c->frame, sc.gc, bx, 0, (unsigned)bw,
-                           (unsigned)th);
-            if (i == BTN_CLOSE)
-                gf = 0xffffffUL;        /* white cross stays white on red */
+            XSetForeground(sc.dpy, sc.gc, 0xedf0f5UL);
+            XDrawArc(sc.dpy, c->frame, sc.gc, ox - 2, oy - 2,
+                     (unsigned)(d + 4), (unsigned)(d + 4), 0, 360 * 64);
         }
-        XSetForeground(sc.dpy, sc.gc, gf);
+        /* glyph in the title-bar tone so the dot keeps its colour */
+        XSetForeground(sc.dpy, sc.gc, bg);
         if (i == BTN_MIN) {
-            /* minus sign, sitting on the baseline of the glyph box */
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy + 5, cx + 5, cy + 5);
+            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 4, cy, cx + 4, cy);
         } else if (i == BTN_MAX) {
             if (c->maximized) {
-                /* restore: two overlapping windows, front one on top */
-                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 7, cy - 7, 10,
-                               10);
-                XSetForeground(sc.dpy, sc.gc, bg);
-                XFillRectangle(sc.dpy, c->frame, sc.gc, cx - 2, cy - 2, 10,
-                               10);
-                XSetForeground(sc.dpy, sc.gc, gf);
-                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 2, cy - 2, 10,
-                               10);
-                XFillRectangle(sc.dpy, c->frame, sc.gc, cx - 1, cy - 1, 8, 2);
+                /* restore: two overlapping squares */
+                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 4, cy - 5, 7, 7);
+                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 2, cy - 3, 7, 7);
             } else {
-                /* maximize: square with a bold top edge */
-                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, 11,
-                               11);
-                XFillRectangle(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, 11, 2);
+                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 4, cy - 4, 8, 8);
             }
         } else {
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy - 5, cx + 5, cy + 5);
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 5, cy + 5, cx + 5, cy - 5);
+            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 3, cy - 3, cx + 3, cy + 3);
+            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 3, cy + 3, cx + 3, cy - 3);
         }
     }
 
-    /* title text (Windows: left aligned after the icon) */
+    /* title text (macOS style: centred between the buttons and the edge) */
     {
-        int tx = 8;
-        int limit = W - (bw > 0 ? bw * 3 : 0) - 8;
+        int left = (bw > 0 ? bw * 3 + 8 : 8);
+        int avail = W - left - 8;
         int baseline = (th + sc.font_ascent - sc.font_descent) / 2;
+        char shown[NAME_MAX_LEN];
 
-        if (have_icon)
-            tx += icon_w + 8;
-        if (limit - tx > 20)
-            draw_text_clip(c->frame, tx, limit, baseline, fg, c->name);
+        if (avail > 40) {
+            fit_text(shown, sizeof(shown), c->name, avail);
+            draw_text(c->frame, left + (avail - text_width(shown)) / 2,
+                      baseline, fg, shown);
+        }
     }
 
     /* separator between title bar and content */
@@ -177,18 +194,17 @@ void frame_paint(Client *c)
 int frame_button_at(Client *c, int x, int y)
 {
     int bw = title_btn_w(c->w);
-    int bx;
 
     if (y < 0 || y >= c->title_h || bw == 0)
         return BTN_NONE;
-    bx = c->w - bw * 3;
-    if (x >= bx + 2 * bw)
-        return BTN_CLOSE;
-    if (x >= bx + bw)
-        return BTN_MAX;
-    if (x >= bx)
-        return BTN_MIN;
-    return BTN_NONE;
+    if (x < 0 || x >= bw * 3)
+        return BTN_NONE;
+    /* cells run close, minimise, maximise from the left */
+    switch (x / bw) {
+    case 0:  return BTN_CLOSE;
+    case 1:  return BTN_MIN;
+    default: return BTN_MAX;
+    }
 }
 
 /* ----------------------------------------------------------------- focus */
@@ -214,16 +230,13 @@ void update_client_list(void)
     free(wins);
 }
 
-void update_active_property(void)
-{
-    Window w = sc.focused ? sc.focused->win : None;
-
-    if (w == None)
-        XDeleteProperty(sc.dpy, sc.root, sc.atom_net_active);
-    else
-        XChangeProperty(sc.dpy, sc.root, sc.atom_net_active, XA_WINDOW, 32,
-                        PropModeReplace, (unsigned char *)&w, 1);
-}
+/*
+ * Publish the window that owns the X input focus.  Tracking a single
+ * value (sc.focus_win) means the property can never disagree with the
+ * focus we actually set, whether it is a managed client or one of our own
+ * application windows.  (implementation lives in util.c next to the
+ * focus helpers, so tests that link util.c alone stay linkable)
+ */
 
 void unfocus_all(void)
 {
@@ -263,7 +276,7 @@ void focus_client(Client *c)
     if (c->frame != None)
         XSetWindowBorder(sc.dpy, c->frame, cfg.col_border_focus);
     frame_paint(c);
-    XSetInputFocus(sc.dpy, c->win, RevertToPointerRoot, CurrentTime);
+    focus_track(c->win);
     if (c->frame != None) {
         XRaiseWindow(sc.dpy, c->frame);
     }
@@ -354,8 +367,12 @@ void client_minimize(Client *c, int on)
                     break;
             if (o)
                 focus_client(o);
-            else
+            else {
+                /* nothing left to focus: drop the stale owner so the
+                   active hint and the taskbar dot both go quiet */
+                focus_drop(c->win);
                 update_active_property();
+            }
         }
         log_msg("minimize 0x%lx '%s'", (unsigned long)c->win, c->name);
     } else {
@@ -370,20 +387,39 @@ void show_desktop_toggle(void)
 {
     Client *c;
     int visible = 0;
+    /* internal windows hidden by show-desktop, restored on the way back */
+    static int hid_fm, hid_sg;
 
     for (c = sc.clients; c; c = c->next)
         if (!c->minimized)
             visible++;
+    if (fm_open() || security_gui_open())
+        visible++;
 
     if (visible) {
         for (c = sc.clients; c; c = c->next)
             if (!c->minimized)
                 client_minimize(c, 1);
+        /* internal apps hide to their taskbar entry, like a minimise */
+        hid_fm = fm_open();
+        if (hid_fm)
+            fm_hide();
+        hid_sg = security_gui_open();
+        if (hid_sg)
+            security_gui_hide();
         sc.show_desktop = 1;
     } else {
         for (c = sc.clients; c; c = c->next)
             if (c->minimized)
                 client_minimize(c, 0);
+        if (hid_fm) {
+            hid_fm = 0;
+            fm_show();
+        }
+        if (hid_sg) {
+            hid_sg = 0;
+            security_gui_show();
+        }
         sc.show_desktop = 0;
         if (sc.clients)
             focus_client(sc.clients);
@@ -620,6 +656,7 @@ void unmanage(Client *c, int client_alive)
 
     if (sc.focused == c)
         sc.focused = NULL;
+    focus_drop(c->win);
 
     if (client_alive) {
         XSelectInput(sc.dpy, c->win, NoEventMask);
@@ -638,7 +675,9 @@ void unmanage(Client *c, int client_alive)
     free(c);
 
     update_client_list();
-    if (!sc.focused && sc.clients) {
+    /* when nothing holds the focus any more, fall back to a managed client;
+       if one of our own application windows still has it, leave it alone */
+    if (!sc.focused && sc.clients && sc.focus_win == None) {
         /* skip hidden windows: restoring a minimized one would pop it up */
         for (it = sc.clients; it; it = it->next)
             if (!it->minimized)
@@ -784,8 +823,19 @@ void handle_client_message(XClientMessageEvent *ev)
 {
     Client *c = client_find(ev->window);
 
-    if (!c)
+    if (!c) {
+        /* our own application windows answer _NET_ACTIVE_WINDOW as well,
+           so tools (xdotool windowactivate) can raise/focus them */
+        if (ev->message_type == sc.atom_net_active) {
+            if (ev->window == fm_window() && fm_window() != None) {
+                fm_show();
+            } else if (ev->window == security_gui_window() &&
+                       security_gui_window() != None) {
+                security_gui_show();
+            }
+        }
         return;
+    }
     if (ev->message_type == sc.atom_net_wm_state &&
         (Atom)ev->data.l[1] == sc.atom_net_wm_state_fullscreen) {
         long action = ev->data.l[0];

@@ -15,7 +15,8 @@ static int mb_x, mb_y, mb_w, mb_h;
 static int mb_ok_x, mb_ok_y, mb_ok_w, mb_ok_h;
 static int mb_hover_ok;
 static char mb_title[96];
-static char mb_lines[6][160];
+#define MB_MAX_LINES 12
+static char mb_lines[MB_MAX_LINES][160];
 static int mb_line_count;
 static int mb_btn_h;
 
@@ -58,9 +59,9 @@ static void msgbox_layout(void)
 
 static void msgbox_wrap(const char *text)
 {
-    char buf[512];
-    char *word, *save;
+    char buf[1024];
     char cur[160];
+    const char *p;
     int maxw;
 
     mb_w = MB_W;
@@ -71,25 +72,43 @@ static void msgbox_wrap(const char *text)
     cur[0] = '\0';
 
     str_copy(buf, sizeof(buf), text ? text : "");
-    for (word = strtok_r(buf, " \t\n", &save); word;
-         word = strtok_r(NULL, " \t\n", &save)) {
-        char trial[192];
+    p = buf;
+
+    while (*p && mb_line_count < MB_MAX_LINES) {
+        if (*p == '\n') {
+            if (mb_line_count < MB_MAX_LINES)
+                str_copy(mb_lines[mb_line_count++], sizeof(mb_lines[0]), cur[0] ? cur : " ");
+            cur[0] = '\0';
+            p++;
+            continue;
+        }
+        if (*p == ' ' || *p == '\t') {
+            p++;
+            continue;
+        }
+        /* extract next word */
+        char word[160];
+        size_t wlen = 0;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && wlen + 1 < sizeof(word)) {
+            word[wlen++] = *p++;
+        }
+        word[wlen] = '\0';
 
         if (cur[0] == '\0') {
             str_copy(cur, sizeof(cur), word);
         } else {
+            char trial[192];
             snprintf(trial, sizeof(trial), "%s %s", cur, word);
             if (text_width(trial) > maxw) {
-                if (mb_line_count < 6)
-                    str_copy(mb_lines[mb_line_count++], sizeof(mb_lines[0]),
-                             cur);
+                if (mb_line_count < MB_MAX_LINES)
+                    str_copy(mb_lines[mb_line_count++], sizeof(mb_lines[0]), cur);
                 str_copy(cur, sizeof(cur), word);
             } else {
                 str_copy(cur, sizeof(cur), trial);
             }
         }
     }
-    if (cur[0] != '\0' && mb_line_count < 6)
+    if (cur[0] != '\0' && mb_line_count < MB_MAX_LINES)
         str_copy(mb_lines[mb_line_count++], sizeof(mb_lines[0]), cur);
     if (mb_line_count == 0)
         str_copy(mb_lines[mb_line_count++], sizeof(mb_lines[0]), " ");
@@ -156,7 +175,7 @@ static void msgbox_draw(void)
     XFillRectangle(sc.dpy, mb_win, sc.gc, 0, 0, (unsigned)mb_w,
                    (unsigned)mb_h);
 
-    /* title strip */
+    /* Harbor title strip with a quiet accent rule */
     XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
     XFillRectangle(sc.dpy, mb_win, sc.gc, 0, 0, (unsigned)mb_w,
                    (unsigned)title_h);
@@ -164,7 +183,7 @@ static void msgbox_draw(void)
     draw_text_clip(mb_win, MB_PAD, mb_w - MB_PAD, bl, cfg.col_title_fg,
                    mb_title);
     XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    XFillRectangle(sc.dpy, mb_win, sc.gc, 0, title_h - 2, (unsigned)mb_w, 2);
+    XFillRectangle(sc.dpy, mb_win, sc.gc, 0, title_h - 1, (unsigned)mb_w, 1);
 
     /* body */
     for (i = 0; i < mb_line_count; i++) {
@@ -176,7 +195,7 @@ static void msgbox_draw(void)
                   mb_lines[i]);
     }
 
-    /* OK button */
+    /* Harbor OK pill: inset button, hairline border, soft white label */
     {
         unsigned long bg = mb_hover_ok ? cfg.col_btn_hover
                                        : cfg.col_btn_inactive;
@@ -186,13 +205,13 @@ static void msgbox_draw(void)
         XSetForeground(sc.dpy, sc.gc, bg);
         XFillRectangle(sc.dpy, mb_win, sc.gc, mb_ok_x, mb_ok_y,
                        (unsigned)mb_ok_w, (unsigned)mb_ok_h);
-        XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+        XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
         XDrawRectangle(sc.dpy, mb_win, sc.gc, mb_ok_x, mb_ok_y,
                        (unsigned)(mb_ok_w - 1), (unsigned)(mb_ok_h - 1));
         draw_text(mb_win, tx, bly, cfg.col_title_fg, "OK");
     }
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
     XDrawRectangle(sc.dpy, mb_win, sc.gc, 0, 0, (unsigned)(mb_w - 1),
                    (unsigned)(mb_h - 1));
 }

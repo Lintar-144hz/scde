@@ -64,13 +64,16 @@ Only `libX11` and libc are required at run time.
 
 ### Implemented
 
-* **Window management** — reparenting title-bar frames, focus-follows-mouse
+* **Window management** — reparenting title-bar frames with a macOS-like
+  chrome (muted traffic-light dots on the left, centred title),
+  focus-follows-mouse
   (or click-to-focus with `focus_follows_mouse=0`), `Alt`+drag move,
-  `Alt`+right-drag / edge resize, title-bar
-  min/max/close buttons, double-click title to maximize, `Alt+Up`/`Alt+Down`,
+  `Alt`+right-drag / edge resize, double-click title to maximize,
+  `Alt+Up`/`Alt+Down`,
   half-screen snap, `Alt+Tab` / `Shift+Alt+Tab`, `Alt+F4`, `Alt+D`
   (show desktop), `_NET_WM_STATE_FULLSCREEN`, `ConfigureRequest` handling.
-* **Panel** — launcher button, task buttons with an active accent, two-line
+* **Panel** — dock-style launcher button, rounded task tiles with a running
+  dot (accent dot for the focused app), two-line
   clock, show-desktop strip, three decorative status glyphs
   (network / volume / battery).
 * **Application menu** — pinned entries plus every
@@ -89,10 +92,13 @@ Only `libX11` and libc are required at run time.
  * **Message dialogs** — including the Plasma-style "program not installed"
    notice instead of failing silently.
  * **Security Center** — built-in security application (no terminal): tray
-   shield or the launcher's "Security Center" entry opens a window with the
-   protection mode (Always-on / Passive / Off), bounded scans (plugins /
-   Desktop / Home), permission toggles and a scrollable security log.
-* **Built-in file manager** — `Alt+E`: navigate, open, rename (`F2`),
+   shield or the launcher's "Security Center" entry opens a card-style window
+   with a live status pill, the protection mode (Always-on / Passive / Off),
+   bounded scans (plugins / Desktop / Home), permission toggles and a
+   scrollable security log.
+* **Built-in file manager** — `Alt+E`: places sidebar (Home, Desktop,
+  Documents, Downloads, …), toolbar with path field and live search filter
+  (`Ctrl+F`), navigate, open, rename (`F2`),
   delete (confirmed), new folder (`Ctrl+N`), hidden files (`Ctrl+H`),
   right-click menu (Open / Rename / Delete / Properties / Set as wallpaper).
 * **Media** — files are classified by extension and opened with an installed
@@ -102,7 +108,7 @@ Only `libX11` and libc are required at run time.
   reported and ignored, built-in defaults when the file is missing.
 * **Lifecycle** — single-instance `fcntl` lock, clean shutdown on
   `SIGINT`/`SIGTERM`/`SIGHUP` with clients reparented back to the root.
-* **Test suite** — 82 automated checks on Xvfb plus three small X test
+* **Test suite** — 129 automated checks on Xvfb plus three small X test
   clients.
 * **HAL** — a separate, dependency-free static library (`hal/libhal.a`)
   with GPU / Bluetooth / Audio APIs, Linux and Android backends, and its own
@@ -133,16 +139,16 @@ Not implemented yet — see [Roadmap](#roadmap).
 
 | Area | Behaviour |
 |---|---|
-| Look | Windows style: reparented frame windows, gradient wallpaper, dark title bar with app icon and min/max/close (restore) buttons, red close hover, double-click title = maximize |
+| Look | Harbor theme with a macOS-like window chrome: reparented frame windows, calm charcoal gradient wallpaper with a quiet ellipse motif, dark title bar with muted traffic-light dots (close/min/max on the left) and a centred title, double-click title = maximize |
 | Window management | MapRequest, ConfigureRequest, DestroyNotify, UnmapNotify, focus-follows-mouse, fullscreen via `_NET_WM_STATE_FULLSCREEN` |
 | Move | `Alt` + Left-drag, or drag the title bar |
 | Resize | `Alt` + Right-drag, or drag a window edge (5 px) |
-| Close | `Alt+F4`, the title-bar ✕ (WM_DELETE_WINDOW, else XKillClient) |
-| Maximize / minimize | `Alt+Up` toggle, `Alt+Down`, title-bar □ / ▬ |
+| Close | `Alt+F4`, the left close dot (WM_DELETE_WINDOW, else XKillClient) |
+| Maximize / minimize | `Alt+Up` toggle, `Alt+Down`, the left maximise / minimise dots |
 | Snap | `Alt+Left` / `Alt+Right` half screen |
 | Show desktop | `Alt+D` or the strip at the far right of the panel |
 | Switch windows | `Alt+Tab`, `Shift+Alt+Tab` (wraps) |
-| Panel | Windows style taskbar: accent Start logo, task buttons with mini icon + label, close ✕ on each wide task button and accent underline for the focused window, tray glyphs (network, volume, battery, Security shield), two-line clock, show-desktop strip |
+| Panel | Harbor dock-style taskbar: calm launcher mark, rounded task tiles with mini mark + label, close ✕ on each wide task button, a running dot under every app and an accent dot + lifted tile for the focused one, tray glyphs (network, volume, battery, Security shield), two-line clock, show-desktop strip |
 | App menu | pinned entries + every `/usr/share/applications/*.desktop`, type-to-search with icon tiles, `Alt+Space` or the launcher button |
 | Program detection | terminal / editor / browser picked from `PATH` (or your `terminal=`, `browser=` config); built-in menu entries are `@terminal`, `@editor`, `@files`, `@browser`, `@apps`, `@run`, `@desktop`, `@security`, `@logout` |
 | Missing program | a Plasma-style notice dialog tells you what to install instead of failing silently |
@@ -150,8 +156,8 @@ Not implemented yet — see [Roadmap](#roadmap).
 | Desktop shortcuts | `~/Desktop` on the wallpaper: click selects, double click opens (a `*.desktop` entry runs its `Exec=`), right click = icon menu, drag = rearrange (saved in `~/.local/share/scde/desktop.layout`); installed applications are shown as icons on the left half (`desktop_apps=1`) |
 | Command launcher | `Alt+F2` — runs a command, or opens a URL (`example.com`, `https://…`) in the detected browser |
 | Terminal | `Alt+Enter` (configurable) — starts the detected external terminal |
-| File manager | `Alt+E` — built in: navigate, rename (F2), delete, new folder, right-click menu, hidden files (Ctrl+H) |
-| Security Center | tray shield or launcher "Security Center": protection mode (Always-on starts the filesystem watcher), scanner (plugins / Desktop / Home, bounded), permission toggles, scrollable security log with Clear |
+| File manager | `Alt+E` — built in: places sidebar (Home, Desktop, Documents, …), toolbar + path field + live search filter, navigate, rename (F2), delete, new folder, right-click menu, hidden files (Ctrl+H) |
+| Security Center | tray shield or launcher "Security Center": protection mode (Always-on starts the filesystem watcher), card layout with live status pill, scanner (plugins / Desktop / Home, bounded), permission toggles, scrollable security log with Clear |
 | Media | photos open with feh, video/music with mpv; `wallpaper=` in the config sets the background |
 | Config | `~/.config/scde/config` (key=value) |
 | Shutdown | clean `SIGINT`/`SIGTERM`/`SIGHUP` handling, clients reparented back to the root |
@@ -199,7 +205,7 @@ scde/
 │   │   └── backends/android/  Android detection + property/sysfs readers
 │   └── tests/               hal_smoke.c (182 checks), hal_info.c
 ├── tests/                   X11 test suite
-│   ├── run_tests.sh         82 checks on Xvfb (timeout-guarded by make)
+│   ├── run_tests.sh         129 checks on Xvfb (timeout-guarded by make)
 │   ├── api_test.c           App API tests (headless, 300 checks)
 │   ├── plugins/             badver/failinit test plugins
 │   ├── testclient.c         minimal X client used by the suite
@@ -424,10 +430,12 @@ build in `build/` / `scde` untouched — you can switch between them without a
 make test
 ```
 
-Runs two real suites and reports both:
+Runs four real suites and reports each:
 
 1. **HAL** — `hal/tests/hal_smoke` (182 checks) and `hal/tests/hal_info`.
-2. **SCDE on Xvfb** — `tests/run_tests.sh` (82 checks): startup/single
+2. **App API** — `tests/api_test` (headless, 300 checks).
+3. **Security boundary** — `tests/security_test`.
+4. **SCDE on Xvfb** — `tests/run_tests.sh` (129 checks): startup/single
    instance, panel geometry, background colour, mapping and borders,
    `_NET_CLIENT_LIST`, focus-follows-mouse, `Alt+Tab` both directions,
    `Alt+drag` move & resize, `ConfigureRequest`, `Alt+F4`, app menu
@@ -435,10 +443,13 @@ Runs two real suites and reports both:
    one process / one thread / RSS / idle CPU / binary size, client
    destruction, maximize/snap/minimize/show-desktop, desktop menu,
    `Alt+F2` URL → browser, the missing-program notice dialog, the built-in
-   file manager, and the desktop shortcuts (icon painted at its saved
+   file manager, the desktop shortcuts (icon painted at its saved
    position, select / deselect by pixel, double click runs `Exec=`, icon
    context menu, New Folder from the desktop menu, drag rewrites the layout
-   file).
+   file), the taskbar registry for File Manager / SCDE Security (open,
+   minimise, restore, close, show-desktop), and the Harbor redesign (places
+   sidebar, live search filter, Security Center cards, gradient wallpaper,
+   dock running dots).
 
 The X suite is wrapped in a hard timeout (default **300 s**, override with
 `make test TEST_TIMEOUT=600`) so it can never hang the build. It starts its
@@ -493,7 +504,7 @@ steps you need to run.
 panel=bottom              # top | bottom
 panel_height=32
 border_width=3            # frame border (>= 3 = usable resize grip)
-title_height=24           # Windows style title bar
+title_height=24           # Harbor title bar
 desktop_apps=1            # installed apps as desktop icons (left half)
 focus_follows_mouse=1
 show_clock=1
@@ -505,25 +516,25 @@ terminal=xterm            # empty = auto-detect from PATH
 browser=                  # empty = auto-detect from PATH
 wallpaper=                # image file, loaded with feh --bg-fill
 font=-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*
-background=#0e1117
-wallpaper_top=#1b2436     # vertical gradient wallpaper
-wallpaper_bottom=#0b0d12
-border_focused=#3daee9
-border_unfocused=#23262c
-title_bg=#2b303a
-title_bg_inactive=#22252c
-title_fg=#eaeef3
-title_fg_inactive=#8b93a1
-title_hover=#39414d
-title_close_hover=#d32f2f
-panel_bg=#171a20
-panel_fg=#c9d1db
-button_active=#2f5f8a
-button_inactive=#24272e
-button_hover=#3a414c
-menu_bg=#1c1f26
-menu_fg=#d5dae2
-menu_selected=#2d5f8f
+background=#171b22
+wallpaper_top=#262e3b     # vertical gradient wallpaper
+wallpaper_bottom=#12151b
+border_focused=#7c9cbf
+border_unfocused=#2a313d
+title_bg=#28303d
+title_bg_inactive=#20262f
+title_fg=#edf0f5
+title_fg_inactive=#98a1b1
+title_hover=#313b49
+title_close_hover=#b04a4a
+panel_bg=#1d232d
+panel_fg=#dbe1ea
+button_active=#334052
+button_inactive=#262c37
+button_hover=#2f3a4a
+menu_bg=#222936
+menu_fg=#dbe1ea
+menu_selected=#38506b
 menu=Terminal|xterm       # pinned entries, shown above the app list
 menu=Editor|${EDITOR:-vi}
 menu=Files|@files         # built-in file manager

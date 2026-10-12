@@ -6,7 +6,7 @@
 panel=bottom
 panel_height=32
 
-# window frame border and Windows style title bar
+# window frame border and Harbor title bar
 # border_width 3 makes the edge resize grip usable
 border_width=3
 title_height=24
@@ -15,22 +15,24 @@ title_height=24
 focus_follows_mouse=1
 
 # ---------------------------------------------------------------- desktop
+# SCDE Harbor theme: dark charcoal, soft white, calm blue-grey accent.
+# Quiet surfaces, one restrained accent, no neon.
 # solid colour fallback and the vertical gradient wallpaper
-background=#0e1117
-wallpaper_top=#1b2436
-wallpaper_bottom=#0b0d12
+background=#171b22
+wallpaper_top=#262e3b
+wallpaper_bottom=#12151b
 
-# accent colour: active window border, task bar underline, Start logo
-border_focused=#0078d7
-border_unfocused=#3b3b3b
+# accent colour: active window border, task bar underline, launcher mark
+border_focused=#7c9cbf
+border_unfocused=#2a313d
 
-# title bar colours (Windows dark theme)
-title_bg=#2b2b2b
-title_bg_inactive=#202020
-title_fg=#ffffff
-title_fg_inactive=#9a9a9a
-title_hover=#3d3d3d
-title_close_hover=#e81123
+# title bar colours (Harbor dark theme)
+title_bg=#28303d
+title_bg_inactive=#20262f
+title_fg=#edf0f5
+title_fg_inactive=#98a1b1
+title_hover=#313b49
+title_close_hover=#b04a4a
 
 # installed applications shown as icons on the desktop (right half)
 desktop_apps=1
@@ -43,16 +45,16 @@ clock_date_format=%b %d
 show_tray=1
 show_desktop_btn=1
 
-panel_bg=#1f1f1f
-panel_fg=#ffffff
-button_active=#4d4d4d
-button_inactive=#333333
-button_hover=#454545
+panel_bg=#1d232d
+panel_fg=#dbe1ea
+button_active=#334052
+button_inactive=#262c37
+button_hover=#2f3a4a
 
 # application menu colours
-menu_bg=#2b2b2b
-menu_fg=#ffffff
-menu_selected=#0078d7
+menu_bg=#222936
+menu_fg=#dbe1ea
+menu_selected=#38506b
 
 # ---------------------------------------------------------------- programs
 # terminal started with Alt+Enter and by the Terminal menu entry

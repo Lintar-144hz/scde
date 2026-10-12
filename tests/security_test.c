@@ -751,6 +751,50 @@ static void test_bait_mirage(void)
     CHECK((int)scde_audit_total(SCDE_AUDIT_BAIT_DELETED) > del_before,
           "BAIT_DELETED audited");
 
+    /* symlink swap: a link planted where a decoy was must be reported but
+       never chmod'ed through - the link target keeps its mode/content */
+    {
+        char victim[300];
+        char vcontent[] = "victim-data";
+        char rback[32];
+        int vfd;
+        struct stat vst;
+        int mod2_before;
+
+        snprintf(victim, sizeof(victim), "%s/victim.txt", root);
+        vfd = open(victim, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (vfd >= 0) {
+            (void)!write(vfd, vcontent, sizeof(vcontent) - 1);
+            close(vfd);
+        }
+        chmod(victim, 0755);
+        CHECK_INT(scde_bait_path(1, dpath, sizeof(dpath)), SCDE_OK,
+                  "second decoy path");
+        unlink(dpath);
+        CHECK_INT(symlink(victim, dpath), 0, "plant decoy symlink");
+        mod2_before =
+            (int)scde_audit_total(SCDE_AUDIT_BAIT_MODIFIED);
+        CHECK(scde_bait_check() > 0, "bait check found symlink swap");
+        CHECK((int)scde_audit_total(SCDE_AUDIT_BAIT_MODIFIED) >
+              mod2_before, "symlink swap audited");
+        CHECK(stat(victim, &vst) == 0 &&
+              (vst.st_mode & 07777) == 0755,
+              "symlink target mode untouched");
+        vfd = open(victim, O_RDONLY);
+        if (vfd >= 0) {
+            ssize_t vn = read(vfd, rback, sizeof(rback) - 1);
+
+            close(vfd);
+            rback[vn > 0 ? vn : 0] = '\0';
+            CHECK(strcmp(rback, vcontent) == 0,
+                  "symlink target content untouched");
+        } else {
+            CHECK(0, "symlink target content untouched");
+        }
+        unlink(dpath);
+        unlink(victim);
+    }
+
     /* disabled bait is inert to polling (explicit exec reports still
      * fail-closed and audited, polling stays silent) */
     CHECK_INT(scde_bait_disable(), SCDE_OK, "bait disable");
@@ -791,6 +835,42 @@ static void test_bait_mirage(void)
     CHECK_INT(scde_mirage_active(), 0, "mirage shut down");
     scde_bait_shutdown();
     CHECK_INT(scde_bait_active(), 0, "bait shut down");
+}
+
+/* --------------------------------------------- symlink cache safety --- */
+
+static void test_scan_symlink_cache(void)
+{
+    char target[300];
+    char link[300];
+    scde_scan_result_t r1, r2;
+
+    snprintf(target, sizeof(target), "%s/link-target.sh", root);
+    snprintf(link, sizeof(link), "%s/link-scan.sh", root);
+    write_file(target, "#!/bin/sh\necho harmless\n", 0755);
+    unlink(link);
+    CHECK_INT(symlink(target, link), 0, "create scan symlink");
+
+    /* first scan through the link: fresh verdict, never served cached */
+    memset(&r1, 0, sizeof(r1));
+    CHECK_INT(scde_scan_file(link, &r1), SCDE_OK, "scan via symlink");
+    CHECK((r1.flags & SCDE_SCANFLAG_CACHED) == 0,
+          "symlink scan never cached");
+    CHECK(r1.status != SCDE_THREAT_BLOCKED, "safe target not blocked");
+
+    /* swap the target content in place (the link itself never changes):
+       a rescan must see the new content, not a stale cached verdict */
+    write_file(target, "#!/bin/sh\ntouch /tmp/pwned\nrm -rf /\n", 0755);
+    memset(&r2, 0, sizeof(r2));
+    CHECK_INT(scde_scan_file(link, &r2), SCDE_OK, "rescan via symlink");
+    CHECK((r2.flags & SCDE_SCANFLAG_CACHED) == 0,
+          "symlink rescan never cached");
+    CHECK(r2.risk > r1.risk, "swapped target raises risk through symlink");
+    CHECK(r2.status == SCDE_THREAT_MALICIOUS ||
+          r2.status == SCDE_THREAT_BLOCKED,
+          "destructive target flagged through symlink");
+    unlink(link);
+    unlink(target);
 }
 
 /* ------------------------------------------------------------ main ----- */
@@ -873,6 +953,7 @@ int main(int argc, char **argv)
     CHECK_INT(r.status, SCDE_THREAT_BLOCKED, "known-bad scanned blocked");
     CHECK_INT(r.hash_status, SCDE_HASH_KNOWN_BAD, "known-bad hash status");
 
+    test_scan_symlink_cache();
     test_gate();
     test_spawn();
     test_sandbox();

@@ -34,7 +34,7 @@
 #define C_AUDIO   0x4dd98aUL
 #define C_ARCHIVE 0xd98a4dUL
 #define C_HTML    0xff8a65UL
-#define C_APP     0x3daee9UL
+#define C_APP     0x6f93bbUL
 #define C_OTHER   0x6f7787UL
 
 typedef struct {
@@ -590,17 +590,23 @@ static void desk_draw_label(const DeskIcon *ic, int bright)
     if (!buf[0])
         return;
     tw = text_width(buf);
-    bw = tw + 6;
+    bw = tw + 8;
     tx = ic->x + (DESK_ICON_W - bw) / 2;
     if (tx < ic->x)
         tx = ic->x;
     bl = y0 + (sc.font_height + sc.font_ascent - sc.font_descent) / 2;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
+    /* Harbor label pill: charcoal chip with a hairline, soft white text */
+    XSetForeground(sc.dpy, sc.gc,
+                   bright ? cfg.col_menu_sel : cfg.col_panel_bg);
     XFillRectangle(sc.dpy, sc.root, sc.gc, tx, y0 - 1, (unsigned)bw,
+                   (unsigned)(sc.font_height + 3));
+    XSetForeground(sc.dpy, sc.gc,
+                   bright ? cfg.col_border_focus : cfg.col_border_unfocus);
+    XDrawRectangle(sc.dpy, sc.root, sc.gc, tx, y0 - 1, (unsigned)(bw - 1),
                    (unsigned)(sc.font_height + 2));
-    draw_text(sc.root, tx + 3, bl,
-              bright ? 0xffffffUL : cfg.col_panel_fg, buf);
+    draw_text(sc.root, tx + 4, bl,
+              bright ? 0xedf0f5UL : cfg.col_panel_fg, buf);
 }
 
 static void desk_paint_icon(int i)
@@ -613,6 +619,9 @@ static void desk_paint_icon(int i)
         XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
         XFillRectangle(sc.dpy, sc.root, sc.gc, ic->x, ic->y,
                        DESK_ICON_W, (unsigned)icon_h());
+        XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+        XDrawRectangle(sc.dpy, sc.root, sc.gc, ic->x, ic->y,
+                       DESK_ICON_W - 1, (unsigned)(icon_h() - 1));
     } else if (i == hover) {
         XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
         XFillRectangle(sc.dpy, sc.root, sc.gc, ic->x, ic->y,

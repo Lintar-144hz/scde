@@ -23,15 +23,20 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define SG_W 580
-#define SG_H 600
+#define SG_W 600
+#define SG_H 640
 #define SG_TITLE 24
 #define SG_PAD 10
-#define SG_LOG_Y 434
+#define SG_LOG_Y 522
 #define SG_LOG_ROW 16
-#define SG_LOG_ROWS 9
+#define SG_LOG_ROWS 6
 #define SG_SCAN_CAP 32
 #define SG_MAX_BTNS 20
+
+/* muted Harbor status tones: sage / amber / clay, never neon */
+#define SG_OK   0x7fb08aUL
+#define SG_WARN 0xc9a86aUL
+#define SG_BAD  0xc07a7aUL
 
 typedef struct {
     int x, y, w, h;
@@ -87,20 +92,31 @@ static void sg_paint_btn(const SecBtn *b, int active, int hover)
     XSetForeground(sc.dpy, sc.gc, bg);
     XFillRectangle(sc.dpy, sg_win, sc.gc, b->x, b->y, (unsigned)b->w,
                    (unsigned)b->h);
-    XSetForeground(sc.dpy, sc.gc,
-                   active ? cfg.col_border_focus : cfg.col_border_unfocus);
+    /* Harbor: quiet hairline on every button, soft white on active */
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
     XDrawRectangle(sc.dpy, sg_win, sc.gc, b->x, b->y, (unsigned)b->w,
                    (unsigned)b->h);
     draw_text(sg_win, cx - text_width(b->label) / 2,
               b->y + (b->h + sc.font_ascent - sc.font_descent) / 2,
-              active ? 0xffffffUL : cfg.col_menu_fg, b->label);
+              active ? 0xedf0f5UL : cfg.col_menu_fg, b->label);
+}
+
+/* Harbor card: menu-tone surface on the panel-tone window, hairline edge */
+static void sg_card(int y, int h)
+{
+    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
+    XFillRectangle(sc.dpy, sg_win, sc.gc, SG_PAD, y,
+                   (unsigned)(SG_W - 2 * SG_PAD), (unsigned)h);
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
+    XDrawRectangle(sc.dpy, sg_win, sc.gc, SG_PAD, y,
+                   (unsigned)(SG_W - 2 * SG_PAD - 1), (unsigned)(h - 1));
 }
 
 static void sg_section(int top, const char *title)
 {
     XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    draw_text(sg_win, SG_PAD, top + sc.font_ascent, cfg.col_border_focus,
-              title);
+    draw_text(sg_win, SG_PAD + 10, top + sc.font_ascent,
+              cfg.col_title_fg_inactive, title);
 }
 
 /* --------------------------------------------------------------- actions -- */
@@ -289,42 +305,92 @@ static void sg_draw(void)
     int i;
     char buf[196];
     const char *mode_names[3] = { "always-on", "passive", "off" };
+    /* Harbor card stack: quiet two-tone surfaces, generous breathing room */
+    const int prot_y = 34, prot_h = 132;
+    const int det_y = 174, det_h = 78;
+    const int scan_y = 260, scan_h = 80;
+    const int perm_y = 348, perm_h = 134;
+    const int log_y = 490, log_h = 140;
+    const int cx0 = SG_PAD + 10;
+    const int cx1 = SG_W - SG_PAD - 10;
 
     if (!sg_win || !sg_open)
         return;
     sg_nbtns = 0;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
+    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
     XFillRectangle(sc.dpy, sg_win, sc.gc, 0, 0, SG_W, SG_H);
 
-    /* title bar */
+    /* macOS-style title: calm close dot left, shield mark, title after */
     XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
     XFillRectangle(sc.dpy, sg_win, sc.gc, 0, 0, SG_W, SG_TITLE);
-    draw_text(sg_win, 8, 16, cfg.col_title_fg, "SCDE Security");
-    if (sg_hover_close) {
-        XSetForeground(sc.dpy, sc.gc, cfg.col_close_hover);
-        XFillRectangle(sc.dpy, sg_win, sc.gc, SG_W - SG_TITLE, 0,
-                       SG_TITLE, SG_TITLE);
-    }
-    XSetForeground(sc.dpy, sc.gc, 0xffffffUL);
-    XDrawLine(sc.dpy, sg_win, sc.gc, SG_W - 16, 8, SG_W - 8, 16);
-    XDrawLine(sc.dpy, sg_win, sc.gc, SG_W - 16, 16, SG_W - 8, 8);
+    {
+        int d = 12, ox = 6, oy = (SG_TITLE - d) / 2;
 
-    /* protection */
-    sg_section(34, "Protection");
-    sg_btn(SG_PAD, 54, 92, 22, 10, "Always-on");
-    sg_btn(SG_PAD + 100, 54, 92, 22, 11, "Passive");
-    sg_btn(SG_PAD + 200, 54, 92, 22, 12, "Off");
+        XSetForeground(sc.dpy, sc.gc, 0xc07a7aUL);
+        XFillArc(sc.dpy, sg_win, sc.gc, ox, oy, (unsigned)d, (unsigned)d, 0,
+                 360 * 64);
+        if (sg_hover_close) {
+            XSetForeground(sc.dpy, sc.gc, 0xedf0f5UL);
+            XDrawArc(sc.dpy, sg_win, sc.gc, ox - 2, oy - 2, (unsigned)(d + 4),
+                     (unsigned)(d + 4), 0, 360 * 64);
+        }
+        XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
+        XDrawLine(sc.dpy, sg_win, sc.gc, ox + 4, oy + 4, ox + 8, oy + 8);
+        XDrawLine(sc.dpy, sg_win, sc.gc, ox + 4, oy + 8, ox + 8, oy + 4);
+    }
+    {
+        XPoint p[5];
+        int sx = 28, cy = SG_TITLE / 2;
+
+        p[0].x = sx;
+        p[0].y = cy - 7;
+        p[1].x = sx + 13;
+        p[1].y = cy - 7;
+        p[2].x = sx + 13;
+        p[2].y = cy;
+        p[3].x = sx + 6;
+        p[3].y = cy + 7;
+        p[4].x = sx;
+        p[4].y = cy;
+        XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+        XFillPolygon(sc.dpy, sg_win, sc.gc, p, 5, Convex, CoordModeOrigin);
+    }
+    draw_text(sg_win, 48, 16, cfg.col_title_fg, "SCDE Security");
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+    XFillRectangle(sc.dpy, sg_win, sc.gc, 0, SG_TITLE - 1, SG_W, 1);
+
     mode = scde_security_get_scan_mode();
     watch_on = scde_security_watch_fd() >= 0;
+
+    /* protection card: segmented mode + live status lines */
+    sg_card(prot_y, prot_h);
+    sg_section(prot_y + 4, "Protection");
+    {
+        /* status pill, top right of the card: calm dot + mode + watcher */
+        unsigned long mc = mode == SCDE_SCAN_ALWAYS_ON ? SG_OK
+                         : mode == SCDE_SCAN_PASSIVE  ? SG_WARN
+                                                      : cfg.col_title_fg_inactive;
+        char pill[96];
+        int pw;
+
+        snprintf(pill, sizeof(pill), "%s  ·  watcher %s",
+                 mode_names[(int)mode], watch_on ? "active" : "off");
+        pw = text_width(pill) + 14;
+        XSetForeground(sc.dpy, sc.gc, mc);
+        XFillRectangle(sc.dpy, sg_win, sc.gc, cx1 - pw - 10,
+                       prot_y + 8, 6, 6);
+        draw_text(sg_win, cx1 - pw, prot_y + 8 + sc.font_ascent, mc,
+                  pill);
+    }
+    sg_btn(cx0, prot_y + 28, 110, 22, 10, "Always-on");
+    sg_btn(cx0 + 118, prot_y + 28, 110, 22, 11, "Passive");
+    sg_btn(cx0 + 236, prot_y + 28, 110, 22, 12, "Off");
     for (i = 0; i < sg_nbtns; i++)
         if (sg_btns[i].id >= 10 && sg_btns[i].id <= 12)
             sg_paint_btn(&sg_btns[i], (sg_btns[i].id - 10) == (int)mode,
                          sg_hover == i);
 
-    snprintf(buf, sizeof(buf), "Protection: %s    watcher: %s",
-             mode_names[(int)mode], watch_on ? "active" : "off");
-    draw_text(sg_win, SG_PAD, 94, cfg.col_menu_fg, buf);
     scde_security_stats(&st);
     snprintf(buf, sizeof(buf),
              "scans %u    threats %u    blocked %u    denied %u    "
@@ -332,11 +398,11 @@ static void sg_draw(void)
              (unsigned)st.scans, (unsigned)st.threats,
              (unsigned)st.blocked, (unsigned)st.denied,
              (unsigned)st.rejected_plugins);
-    draw_text(sg_win, SG_PAD, 110, cfg.col_menu_fg, buf);
+    draw_text(sg_win, cx0, prot_y + 66, cfg.col_menu_fg, buf);
     scde_security_db_info(&rules, &hashes, &trusted);
     snprintf(buf, sizeof(buf), "rules %d    bad hashes %d    trusted %d",
              rules, hashes, trusted);
-    draw_text(sg_win, SG_PAD, 126, cfg.col_menu_fg, buf);
+    draw_text(sg_win, cx0, prot_y + 82, cfg.col_menu_fg, buf);
 
     /* honest enforcement status: what the kernel/sandbox can really do
      * here (probes ran once at init) - never claim isolation we lack */
@@ -350,18 +416,22 @@ static void sg_draw(void)
                  scde_feature_state_name(f.sandbox),
                  mode == SCDE_SCAN_OFF ? "off" : "active",
                  f.proot ? "   (proot: limited)" : "");
-        draw_text(sg_win, SG_PAD, 136, cfg.col_border_unfocus, buf);
+        fit_text(buf, sizeof(buf), buf, cx1 - cx0);
+        draw_text(sg_win, cx0, prot_y + 98, cfg.col_title_fg_inactive,
+                  buf);
     }
     {
         char lim[96];
 
         scde_resource_describe(lim, sizeof(lim));
-        fit_text(buf, sizeof(buf), lim, SG_W - 2 * SG_PAD);
-        draw_text(sg_win, SG_PAD, 150, cfg.col_border_unfocus, buf);
+        fit_text(buf, sizeof(buf), lim, cx1 - cx0);
+        draw_text(sg_win, cx0, prot_y + 114, cfg.col_title_fg_inactive,
+                  buf);
     }
 
-    /* detection (advisory only: bait/mirage detect, they never isolate) */
-    sg_section(160, "Detection (advisory, not a sandbox)");
+    /* detection card (advisory only: bait/mirage detect, never isolate) */
+    sg_card(det_y, det_h);
+    sg_section(det_y + 4, "Detection (advisory, not a sandbox)");
     {
         int bait_on = scde_bait_enabled();
         int mir_on = scde_mirage_enabled();
@@ -369,51 +439,54 @@ static void sg_draw(void)
         snprintf(buf, sizeof(buf), "Bait: %s  hits: %d",
                  !scde_bait_active() ? "OFF" : bait_on ? "ON" : "OFF",
                  scde_bait_hits());
-        draw_text(sg_win, SG_PAD, 182, cfg.col_menu_fg, buf);
-        sg_btn(SG_W - SG_PAD - 118, 168, 56, 16, 30,
+        draw_text(sg_win, cx0, det_y + 44, cfg.col_menu_fg, buf);
+        sg_btn(cx1 - 118, det_y + 30, 56, 16, 30,
                bait_on ? "ON" : "OFF");
         sg_paint_btn(&sg_btns[sg_nbtns - 1], bait_on,
                      sg_hover == sg_nbtns - 1);
-        sg_btn(SG_W - SG_PAD - 56, 168, 56, 16, 32, "Check");
+        sg_btn(cx1 - 56, det_y + 30, 56, 16, 32, "Check");
         sg_paint_btn(&sg_btns[sg_nbtns - 1], 0,
                      sg_hover == sg_nbtns - 1);
 
         snprintf(buf, sizeof(buf), "Mirage: %s  probes: %d",
                  !scde_mirage_active() ? "OFF" : mir_on ? "ON" : "OFF",
                  scde_mirage_probes());
-        draw_text(sg_win, SG_PAD, 202, cfg.col_menu_fg, buf);
-        sg_btn(SG_W - SG_PAD - 118, 188, 56, 16, 31,
+        draw_text(sg_win, cx0, det_y + 66, cfg.col_menu_fg, buf);
+        sg_btn(cx1 - 118, det_y + 52, 56, 16, 31,
                mir_on ? "ON" : "OFF");
         sg_paint_btn(&sg_btns[sg_nbtns - 1], mir_on,
                      sg_hover == sg_nbtns - 1);
     }
 
-    /* scanner */
-    sg_section(212, "Scanner");
-    sg_btn(SG_PAD, 230, 104, 22, 20, "Scan plugins");
-    sg_btn(SG_PAD + 112, 230, 104, 22, 21, "Scan Desktop");
-    sg_btn(SG_PAD + 224, 230, 104, 22, 22, "Scan Home");
+    /* scanner card */
+    sg_card(scan_y, scan_h);
+    sg_section(scan_y + 4, "Scanner");
+    sg_btn(cx0, scan_y + 28, 118, 22, 20, "Scan plugins");
+    sg_btn(cx0 + 126, scan_y + 28, 118, 22, 21, "Scan Desktop");
+    sg_btn(cx0 + 252, scan_y + 28, 118, 22, 22, "Scan Home");
     for (i = 0; i < sg_nbtns; i++)
         if (sg_btns[i].id >= 20 && sg_btns[i].id <= 22)
             sg_paint_btn(&sg_btns[i], 0, sg_hover == i);
-    fit_text(buf, sizeof(buf), sg_scan_status, SG_W - 2 * SG_PAD);
-    draw_text(sg_win, SG_PAD, 270, cfg.col_menu_fg, buf);
+    fit_text(buf, sizeof(buf), sg_scan_status, cx1 - cx0);
+    draw_text(sg_win, cx0, scan_y + 68, cfg.col_menu_fg, buf);
 
-    /* permissions */
-    sg_section(284, "Permissions");
+    /* permissions card */
+    sg_card(perm_y, perm_h);
+    sg_section(perm_y + 4, "Permissions");
     for (i = 0; i < SCDE_POL_COUNT; i++) {
-        int y = 304 + i * 20;
+        int y = perm_y + 28 + i * 20;
         int on = scde_policy_get(i);
 
-        draw_text(sg_win, SG_PAD, y + 14, cfg.col_menu_fg, pol_names[i]);
-        sg_btn(SG_W - SG_PAD - 56, y + 2, 56, 16, 100 + i,
+        draw_text(sg_win, cx0, y + 14, cfg.col_menu_fg, pol_names[i]);
+        sg_btn(cx1 - 56, y + 2, 56, 16, 100 + i,
                on ? "ON" : "OFF");
         sg_paint_btn(&sg_btns[sg_nbtns - 1], on, sg_hover == sg_nbtns - 1);
     }
 
-    /* log */
-    sg_section(414, "Log");
-    sg_btn(SG_W - SG_PAD - 60, 410, 60, 18, 200, "Clear");
+    /* log card: calm rows, clay tone only when risk is high */
+    sg_card(log_y, log_h);
+    sg_section(log_y + 4, "Log");
+    sg_btn(cx1 - 60, log_y + 8, 60, 18, 200, "Clear");
     sg_paint_btn(&sg_btns[sg_nbtns - 1], 0, sg_hover == sg_nbtns - 1);
     {
         int n = scde_audit_count();
@@ -429,8 +502,8 @@ static void sg_draw(void)
         if (start < 0)
             start = 0;
         if (n == 0)
-            draw_text(sg_win, SG_PAD, SG_LOG_Y + 12,
-                      cfg.col_border_unfocus, "audit log is empty");
+            draw_text(sg_win, cx0, SG_LOG_Y + 12,
+                      cfg.col_title_fg_inactive, "audit log is empty");
         for (i = start; i < end; i++) {
             scde_audit_entry_t e;
             int row = SG_LOG_Y + (i - start) * SG_LOG_ROW;
@@ -441,17 +514,17 @@ static void sg_draw(void)
             if (scde_audit_get(i, &e) != SCDE_OK)
                 continue;
             age = (unsigned long)((now - e.time_ms) / 1000u);
-            color = e.risk >= 50 ? cfg.col_close_hover : cfg.col_menu_fg;
+            color = e.risk >= 50 ? SG_BAD : cfg.col_menu_fg;
             snprintf(line, sizeof(line), "%s %lu s  %s  r%d  %s",
                      sg_prefix(e.event), age,
                      scde_audit_event_name(e.event), e.risk, e.subject);
-            fit_text(buf, sizeof(buf), line, SG_W - 2 * SG_PAD);
-            draw_text(sg_win, SG_PAD, row + 12, color, buf);
+            fit_text(buf, sizeof(buf), line, cx1 - cx0);
+            draw_text(sg_win, cx0, row + 12, color, buf);
         }
     }
 
-    /* focus border */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+    /* quiet outer hairline */
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
     XDrawRectangle(sc.dpy, sg_win, sc.gc, 0, 0, (unsigned)(SG_W - 1),
                    (unsigned)(SG_H - 1));
     XFlush(sc.dpy);
@@ -465,7 +538,7 @@ void security_gui_show(void)
         XSetWindowAttributes wa;
 
         wa.override_redirect = True;
-        wa.background_pixel = cfg.col_menu_bg;
+        wa.background_pixel = cfg.col_panel_bg;
         wa.event_mask = ExposureMask | ButtonPressMask | PointerMotionMask |
                         KeyPressMask;
         sg_x = (sc.sw - SG_W) / 2;
@@ -481,7 +554,10 @@ void security_gui_show(void)
     sg_hover = -1;
     sg_hover_close = 0;
     XMapRaised(sc.dpy, sg_win);
-    XSetInputFocus(sc.dpy, sg_win, RevertToPointerRoot, CurrentTime);
+    focus_track(sg_win);
+    taskbar_register(sg_win, TASK_APP_SECURITY, "SCDE Security");
+    taskbar_set_hidden(sg_win, 0);
+    panel_update();
     XFlush(sc.dpy);
     sg_draw();
 }
@@ -489,18 +565,47 @@ void security_gui_show(void)
 void security_gui_toggle(void)
 {
     if (sg_open)
-        security_gui_hide();
+        security_gui_close();
     else
         security_gui_show();
 }
 
+/*
+ * Hide the window but keep its taskbar entry (minimise semantics): the
+ * entry stays and a click on it brings the window back.
+ */
 void security_gui_hide(void)
 {
     if (!sg_open)
         return;
     sg_open = 0;
+    focus_drop(sg_win);
+    /* focus falls back to the last focused client window, if any */
+    if (sc.focused && !sc.focused->minimized)
+        focus_track(sc.focused->win);
+    taskbar_register(sg_win, TASK_APP_SECURITY, "SCDE Security");
+    taskbar_set_hidden(sg_win, 1);
+    panel_update();
     XUnmapWindow(sc.dpy, sg_win);
     XFlush(sc.dpy);
+}
+
+/*
+ * Close the window and drop its taskbar entry.  The X window object is
+ * kept for a fast reopen; reopening registers exactly one fresh entry.
+ */
+void security_gui_close(void)
+{
+    if (sg_win == None)
+        return;
+    if (sg_open) {
+        sg_open = 0;
+        focus_drop(sg_win);
+        XUnmapWindow(sc.dpy, sg_win);
+        XFlush(sc.dpy);
+    }
+    taskbar_unregister(sg_win);
+    panel_update();
 }
 
 int security_gui_open(void)
@@ -522,6 +627,7 @@ void security_gui_redraw(void)
 void security_gui_cleanup(void)
 {
     if (sg_win != None) {
+        taskbar_unregister(sg_win);
         XDestroyWindow(sc.dpy, sg_win);
         sg_win = None;
     }
@@ -546,7 +652,7 @@ int security_gui_motion(XMotionEvent *ev)
 
     if (!sg_open || ev->window != sg_win)
         return 0;
-    if (ev->y < SG_TITLE && ev->x >= SG_W - SG_TITLE)
+    if (ev->y < SG_TITLE && ev->x < SG_TITLE)
         hc = 1;
     for (i = 0; i < sg_nbtns; i++) {
         if (ev->x >= sg_btns[i].x && ev->x < sg_btns[i].x + sg_btns[i].w &&
@@ -581,10 +687,10 @@ int security_gui_button(XButtonEvent *ev)
     }
     if (ev->button != Button1)
         return 1;
-    XSetInputFocus(sc.dpy, sg_win, RevertToPointerRoot, CurrentTime);
+    focus_track(sg_win);
     if (ev->y < SG_TITLE) {
-        if (ev->x >= SG_W - SG_TITLE)
-            security_gui_hide();
+        if (ev->x < SG_TITLE)
+            security_gui_close();
         else                            /* title bar drags the window */
             selfdrag_window(sg_win, ev, &sg_x, &sg_y, SG_W, SG_H);
         return 1;
@@ -630,5 +736,5 @@ void security_gui_key(XKeyEvent *ev)
         return;
     XLookupString(ev, tmp, sizeof(tmp) - 1, &sym, NULL);
     if (sym == XK_Escape || sym == XK_q)
-        security_gui_hide();
+        security_gui_close();
 }

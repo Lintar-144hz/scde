@@ -72,6 +72,7 @@ void input_grab_keys(void)
     grab_key(XK_Right, Mod1Mask);           /* snap right */
     grab_key(XK_d, Mod1Mask);               /* show desktop */
     grab_key(XK_e, Mod1Mask);               /* file manager / browser */
+    grab_key(XK_s, Mod1Mask);               /* security center */
 
     XSync(sc.dpy, False);
 }
@@ -385,6 +386,22 @@ void selfdrag_window(Window win, XButtonEvent *ev, int *x, int *y,
 
 /* ------------------------------------------------------------------ keys */
 
+/*
+ * The X server's real input focus.  Grabbed Alt+chords arrive with
+ * ev->window == root (the grab window), so dispatching close/minimise by
+ * ev->window would always miss; the tracked sc.focus_win can go stale when
+ * an external tool moves focus.  One round trip, only on key handling.
+ */
+static Window current_focus(void)
+{
+    Window f = None;
+    int revert = RevertToNone;
+
+    if (sc.dpy)
+        XGetInputFocus(sc.dpy, &f, &revert);
+    return f;
+}
+
 void handle_key_press(XKeyEvent *ev)
 {
     KeySym sym = XLookupKeysym(ev, 0);
@@ -394,13 +411,18 @@ void handle_key_press(XKeyEvent *ev)
 
     if (msgbox_key(ev))
         return;
-    if (security_gui_open() && ev->window == security_gui_window()) {
-        security_gui_key(ev);
-        return;
-    }
-    if (fm_open() && ev->window == fm_window()) {
-        fm_key(ev);
-        return;
+    /* Inside our own application windows Alt+chords stay window-manager
+       level (close, minimise, switch, ...): our windows use no Alt-based
+       input, so swallowing them here would break Alt+F4 / Alt+Down. */
+    if (base != Mod1Mask) {
+        if (security_gui_open() && ev->window == security_gui_window()) {
+            security_gui_key(ev);
+            return;
+        }
+        if (fm_open() && ev->window == fm_window()) {
+            fm_key(ev);
+            return;
+        }
     }
     if (menu_is_open()) {
         menu_key(ev);
@@ -415,7 +437,19 @@ void handle_key_press(XKeyEvent *ev)
 
     switch (sym) {
     case XK_F4:
-        close_client(sc.focused);
+        /* internal application windows close like managed ones */
+        {
+            Window fw = current_focus();
+
+            if ((fw == fm_window() || ev->window == fm_window()) && fm_open())
+                fm_close();
+            else if ((fw == security_gui_window() ||
+                      ev->window == security_gui_window()) &&
+                     security_gui_open())
+                security_gui_close();
+            else
+                close_client(sc.focused);
+        }
         break;
     case XK_F2:
         cmd_show();
@@ -441,6 +475,22 @@ void handle_key_press(XKeyEvent *ev)
             client_maximize(c, !c->maximized);
         break;
     case XK_Down:
+        /* internal windows minimise to their taskbar entry */
+        {
+            Window fw = current_focus();
+
+            if ((fw == fm_window() || ev->window == fm_window()) &&
+                fm_open()) {
+                fm_hide();
+                break;
+            }
+            if ((fw == security_gui_window() ||
+                 ev->window == security_gui_window()) &&
+                security_gui_open()) {
+                security_gui_hide();
+                break;
+            }
+        }
         c = sc.focused;
         if (c)
             client_minimize(c, c->minimized ? 0 : 1);
@@ -458,6 +508,9 @@ void handle_key_press(XKeyEvent *ev)
         break;
     case XK_e:
         fm_show();
+        break;
+    case XK_s:
+        security_gui_toggle();
         break;
     default:
         break;

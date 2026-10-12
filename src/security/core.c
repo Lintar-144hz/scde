@@ -335,7 +335,6 @@ static int first_word(const char *cmd, char *out, size_t out_len)
         const char *start;
         int quoted = 0;
         int is_assign = 0;
-        const char *eq = NULL;
 
         while (*p == ' ' || *p == '\t')
             p++;
@@ -343,7 +342,7 @@ static int first_word(const char *cmd, char *out, size_t out_len)
             break;
         start = p;
         n = 0;
-        while (*p && (quoted || *p != ' ')) {
+        while (*p && (quoted || (*p != ' ' && *p != '\t'))) {
             if (*p == '\'' || *p == '"') {
                 char q = *p;
 
@@ -360,15 +359,13 @@ static int first_word(const char *cmd, char *out, size_t out_len)
             }
             if (n + 1 < out_len)
                 out[n++] = *p;
-            if (*p == '=' && !eq)
-                eq = p;
             p++;
         }
         out[n] = '\0';
         if (n == 0)
             break;
         /* NAME=value in front of the real command: skip this word */
-        if (start == p - (p - start)) {
+        {
             const char *q = start;
 
             while (q < p && *q != '/' && *q != '=')

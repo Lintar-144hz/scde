@@ -157,10 +157,12 @@ typedef struct {
     Atom atom_net_wm_state_fullscreen;
     Atom atom_net_supported;
     Atom atom_net_supporting_wm_check;
+    Atom atom_scde_task_list;
     Window wm_check;
 
     Client *clients;            /* mapping order, head = first mapped */
     Client *focused;
+    Window focus_win;           /* window that owns the X input focus */
     int show_desktop;
 
     MenuEntry *menu_items;      /* pinned + installed applications */
@@ -185,6 +187,46 @@ typedef struct {
 
 extern Scde sc;
 extern Config cfg;
+
+/* -------------------------------------------------------------- taskbar.c */
+
+/* application type of a taskbar entry */
+#define TASK_APP_CLIENT   0   /* reparented external client (wm) */
+#define TASK_APP_FM       1   /* built-in file manager */
+#define TASK_APP_SECURITY 2   /* built-in security center */
+
+typedef struct {
+    Window win;
+    Client *client;             /* non-NULL for managed external clients */
+    int app_type;
+    int hidden;                 /* minimized / unmapped */
+    int focused;                /* owns the X input focus */
+    char title[NAME_MAX_LEN];
+} TaskEntry;
+
+typedef struct {
+    Window win;
+    int app_type;
+    int hidden;
+    char title[NAME_MAX_LEN];
+} TaskInternal;
+
+void taskbar_register(Window w, int app_type, const char *title);
+void taskbar_unregister(Window w);
+void taskbar_set_title(Window w, const char *title);
+void taskbar_set_hidden(Window w, int hidden);
+void taskbar_clear(void);
+void taskbar_sync(void);
+int taskbar_count(void);
+const TaskEntry *taskbar_at(int i);
+int taskbar_internal_count(void);
+const TaskInternal *taskbar_internal_at(int i);
+void taskbar_activate(int i);
+void taskbar_close(int i);
+
+/* track the X window that currently owns the input focus */
+void focus_track(Window w);
+void focus_drop(Window w);
 
 /* ------------------------------------------------------------------ util.c */
 
@@ -335,6 +377,7 @@ void cmd_expose(XExposeEvent *ev);
 void fm_show(void);
 void fm_show_path(const char *path);
 void fm_hide(void);
+void fm_close(void);
 int fm_open(void);
 Window fm_window(void);
 int fm_expose(XExposeEvent *ev);
@@ -345,8 +388,10 @@ void fm_cleanup(void);
 
 /* -------------------------------------------------------- security_gui.c */
 
+void security_gui_show(void);
 void security_gui_toggle(void);
 void security_gui_hide(void);
+void security_gui_close(void);
 int security_gui_open(void);
 Window security_gui_window(void);
 void security_gui_redraw(void);

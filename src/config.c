@@ -14,7 +14,7 @@ void config_defaults(Config *c)
 {
     memset(c, 0, sizeof(*c));
 
-    c->panel_top = 0;                    /* bottom panel (Windows style) */
+    c->panel_top = 0;                    /* bottom panel (Harbor style) */
     c->panel_height = 32;
     c->border_width = 3;                /* >= 3 gives a usable resize grip */
     c->title_height = 24;
@@ -30,28 +30,29 @@ void config_defaults(Config *c)
     str_copy(c->font, sizeof(c->font),
              "-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*");
 
-    /* Windows 10 dark palette */
-    str_copy(c->s_background, sizeof(c->s_background), "#0e1117");
-    str_copy(c->s_wallpaper_top, sizeof(c->s_wallpaper_top), "#1b2436");
-    str_copy(c->s_wallpaper_bottom, sizeof(c->s_wallpaper_bottom), "#0b0d12");
-    str_copy(c->s_border_focus, sizeof(c->s_border_focus), "#0078d7");
-    str_copy(c->s_border_unfocus, sizeof(c->s_border_unfocus), "#3b3b3b");
-    str_copy(c->s_title_bg, sizeof(c->s_title_bg), "#2b2b2b");
+    /* SCDE Harbor palette: dark charcoal, soft white, calm blue-grey.
+       Quiet surfaces, one restrained accent, no neon. */
+    str_copy(c->s_background, sizeof(c->s_background), "#171b22");
+    str_copy(c->s_wallpaper_top, sizeof(c->s_wallpaper_top), "#262e3b");
+    str_copy(c->s_wallpaper_bottom, sizeof(c->s_wallpaper_bottom), "#12151b");
+    str_copy(c->s_border_focus, sizeof(c->s_border_focus), "#7c9cbf");
+    str_copy(c->s_border_unfocus, sizeof(c->s_border_unfocus), "#2a313d");
+    str_copy(c->s_title_bg, sizeof(c->s_title_bg), "#28303d");
     str_copy(c->s_title_bg_inactive, sizeof(c->s_title_bg_inactive),
-             "#202020");
-    str_copy(c->s_title_fg, sizeof(c->s_title_fg), "#ffffff");
+             "#20262f");
+    str_copy(c->s_title_fg, sizeof(c->s_title_fg), "#edf0f5");
     str_copy(c->s_title_fg_inactive, sizeof(c->s_title_fg_inactive),
-             "#9a9a9a");
-    str_copy(c->s_title_hover, sizeof(c->s_title_hover), "#3d3d3d");
-    str_copy(c->s_close_hover, sizeof(c->s_close_hover), "#e81123");
-    str_copy(c->s_panel_bg, sizeof(c->s_panel_bg), "#1f1f1f");
-    str_copy(c->s_panel_fg, sizeof(c->s_panel_fg), "#ffffff");
-    str_copy(c->s_btn_active, sizeof(c->s_btn_active), "#4d4d4d");
-    str_copy(c->s_btn_inactive, sizeof(c->s_btn_inactive), "#333333");
-    str_copy(c->s_btn_hover, sizeof(c->s_btn_hover), "#454545");
-    str_copy(c->s_menu_bg, sizeof(c->s_menu_bg), "#2b2b2b");
-    str_copy(c->s_menu_fg, sizeof(c->s_menu_fg), "#ffffff");
-    str_copy(c->s_menu_sel, sizeof(c->s_menu_sel), "#0078d7");
+             "#98a1b1");
+    str_copy(c->s_title_hover, sizeof(c->s_title_hover), "#313b49");
+    str_copy(c->s_close_hover, sizeof(c->s_close_hover), "#b04a4a");
+    str_copy(c->s_panel_bg, sizeof(c->s_panel_bg), "#1d232d");
+    str_copy(c->s_panel_fg, sizeof(c->s_panel_fg), "#dbe1ea");
+    str_copy(c->s_btn_active, sizeof(c->s_btn_active), "#334052");
+    str_copy(c->s_btn_inactive, sizeof(c->s_btn_inactive), "#262c37");
+    str_copy(c->s_btn_hover, sizeof(c->s_btn_hover), "#2f3a4a");
+    str_copy(c->s_menu_bg, sizeof(c->s_menu_bg), "#222936");
+    str_copy(c->s_menu_fg, sizeof(c->s_menu_fg), "#dbe1ea");
+    str_copy(c->s_menu_sel, sizeof(c->s_menu_sel), "#38506b");
 }
 
 static int to_int(const char *v, int lo, int hi, int fallback)
@@ -206,25 +207,25 @@ int config_load(Config *c, const char *path)
 
 int config_resolve_colors(Config *c)
 {
-    c->col_background = parse_color(c->s_background, 0x0e1117);
-    c->col_wallpaper_top = parse_color(c->s_wallpaper_top, 0x1b2436);
-    c->col_wallpaper_bottom = parse_color(c->s_wallpaper_bottom, 0x0b0d12);
-    c->col_border_focus = parse_color(c->s_border_focus, 0x0078d7);
-    c->col_border_unfocus = parse_color(c->s_border_unfocus, 0x3b3b3b);
-    c->col_title_bg = parse_color(c->s_title_bg, 0x2b2b2b);
-    c->col_title_bg_inactive = parse_color(c->s_title_bg_inactive, 0x202020);
-    c->col_title_fg = parse_color(c->s_title_fg, 0xffffff);
-    c->col_title_fg_inactive = parse_color(c->s_title_fg_inactive, 0x9a9a9a);
-    c->col_title_hover = parse_color(c->s_title_hover, 0x3d3d3d);
-    c->col_close_hover = parse_color(c->s_close_hover, 0xe81123);
-    c->col_panel_bg = parse_color(c->s_panel_bg, 0x1f1f1f);
-    c->col_panel_fg = parse_color(c->s_panel_fg, 0xffffff);
-    c->col_btn_active = parse_color(c->s_btn_active, 0x4d4d4d);
-    c->col_btn_inactive = parse_color(c->s_btn_inactive, 0x333333);
-    c->col_btn_hover = parse_color(c->s_btn_hover, 0x454545);
-    c->col_menu_bg = parse_color(c->s_menu_bg, 0x2b2b2b);
-    c->col_menu_fg = parse_color(c->s_menu_fg, 0xffffff);
-    c->col_menu_sel = parse_color(c->s_menu_sel, 0x0078d7);
+    c->col_background = parse_color(c->s_background, 0x171b22);
+    c->col_wallpaper_top = parse_color(c->s_wallpaper_top, 0x262e3b);
+    c->col_wallpaper_bottom = parse_color(c->s_wallpaper_bottom, 0x12151b);
+    c->col_border_focus = parse_color(c->s_border_focus, 0x7c9cbf);
+    c->col_border_unfocus = parse_color(c->s_border_unfocus, 0x2a313d);
+    c->col_title_bg = parse_color(c->s_title_bg, 0x28303d);
+    c->col_title_bg_inactive = parse_color(c->s_title_bg_inactive, 0x20262f);
+    c->col_title_fg = parse_color(c->s_title_fg, 0xedf0f5);
+    c->col_title_fg_inactive = parse_color(c->s_title_fg_inactive, 0x98a1b1);
+    c->col_title_hover = parse_color(c->s_title_hover, 0x313b49);
+    c->col_close_hover = parse_color(c->s_close_hover, 0xb04a4a);
+    c->col_panel_bg = parse_color(c->s_panel_bg, 0x1d232d);
+    c->col_panel_fg = parse_color(c->s_panel_fg, 0xdbe1ea);
+    c->col_btn_active = parse_color(c->s_btn_active, 0x334052);
+    c->col_btn_inactive = parse_color(c->s_btn_inactive, 0x262c37);
+    c->col_btn_hover = parse_color(c->s_btn_hover, 0x2f3a4a);
+    c->col_menu_bg = parse_color(c->s_menu_bg, 0x222936);
+    c->col_menu_fg = parse_color(c->s_menu_fg, 0xdbe1ea);
+    c->col_menu_sel = parse_color(c->s_menu_sel, 0x38506b);
     return 0;
 }
 

@@ -5,6 +5,14 @@ scde
 scde-debug
 hal/libhal.a
 
+# test binaries (rebuilt by `make`)
+tests/api_test
+tests/security_test
+
+# local session transcripts / AI tooling config - never committed
+session-*.md
+opencode.json
+
 *.o
 *.a
 *.so

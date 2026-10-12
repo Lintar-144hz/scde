@@ -21,11 +21,11 @@ mkdir -p "$HOME/.config/scde"
 cat > "$HOME/.config/scde/config" <<EOF
 panel=bottom
 panel_height=32
-border_width=1
+border_width=3
 title_height=24
-background=#0e1114
-wallpaper_top=#1b2436
-wallpaper_bottom=#0b0d12
+background=#171b22
+wallpaper_top=#262e3b
+wallpaper_bottom=#12151b
 clock_format=%H:%M
 clock_date_format=%b %d
 menu=Terminal|xterm

@@ -47,7 +47,7 @@ TEST_TIMEOUT ?= 300
 
 SRC = src/main.c src/util.c src/config.c src/wm.c src/input.c \
       src/panel.c src/launcher.c src/apps.c src/msgbox.c src/fm.c \
-      src/desktop.c src/security_gui.c
+      src/desktop.c src/security_gui.c src/taskbar.c
 OBJ = $(patsubst %.c,$(OBJDIR)/%.o,$(SRC))
 
 # the App API + plugin system: a static library shared by scde and the tests

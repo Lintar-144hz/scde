@@ -617,10 +617,10 @@ fi
 
 # the shortcut is painted on the root window at its saved position
 PIX=$("$PIXELBIN" 434 310 2>/dev/null | tr -d '\n')
-if [ "$PIX" = "0x3daee9" ]; then
+if [ "$PIX" = "0x6f93bb" ]; then
     ok "shortcut icon is drawn on the desktop (pixel $PIX)"
 else
-    bad "shortcut icon is drawn on the desktop (got $PIX, want 0x3daee9)"
+    bad "shortcut icon is drawn on the desktop (got $PIX, want 0x6f93bb)"
 fi
 
 # single click selects the icon
@@ -685,6 +685,336 @@ if [ -n "${LX:-}" ] && [ "${LX:-0}" -gt 400 ] && grep -q "$DESK/test.desktop" "$
     ok "dragging a shortcut saves its position ($LX $LY)"
 else
     bad "dragging a shortcut saves its position (${LX:-?} ${LY:-?})"
+fi
+
+# --------------------------------------- 18. taskbar integration (internal)
+log "[18] taskbar: File Manager + SCDE Security entries"
+
+# The taskbar registry publishes its entries on the root window so the
+# window list can be verified exactly instead of pixel guessing.  Only real
+# window ids are ever extracted (a missing property must yield nothing).
+tasklist()  { xprop -root _SCDE_TASK_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]*' | tr '\n' ' '; }
+tasknames() { local w; for w in $(tasklist); do xdotool getwindowname $((w)) 2>/dev/null; done; }
+taskcount() { tasknames | grep -c -- "$1"; }
+# panel button row: top panel -> middle of a 28px bar is y=14
+TPANY=$([ "$(grep -c 'panel=top' "$HOME/.config/scde/config")" -gt 0 ] && echo 14 || echo $((H - 14)))
+# task buttons start right of the launcher (x=50) and are 176px wide on this
+# screen, so the first two entries sit around x=100 and x=250
+TX1=100
+TX2=250
+
+# start from a clean desktop: managed windows are covered by tests [3] and
+# [15]; this block exercises the internal application windows, and their
+# button positions must be predictable.
+for id in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]*'); do
+    xdotool windowkill $((id)) 2>/dev/null
+done
+for i in $(seq 1 30); do
+    xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -q '0x' || break
+    sleep 0.2
+done
+if xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -q '0x'; then
+    bad "taskbar test starts without managed windows"
+else
+    ok "taskbar test starts without managed windows"
+fi
+
+# 1. open the file manager -> its entry appears
+xdotool key alt+e; sleep 0.7
+FM=$(xdotool search --onlyvisible --name '^scde-fm' 2>/dev/null | head -1)
+if [ -n "${FM:-}" ]; then ok "File Manager window opens"; else bad "File Manager window opens"; fi
+if [ "$(taskcount 'scde-fm')" = "1" ]; then
+    ok "File Manager taskbar entry exists"
+else
+    bad "File Manager taskbar entry exists (got $(taskcount 'scde-fm'))"
+fi
+
+# 2. open the security center -> its entry appears
+xdotool key alt+s; sleep 0.7
+SG=$(xdotool search --onlyvisible --name '^SCDE Security' 2>/dev/null | head -1)
+if [ -n "${SG:-}" ]; then ok "SCDE Security window opens"; else bad "SCDE Security window opens"; fi
+if [ "$(taskcount 'SCDE Security')" = "1" ]; then
+    ok "SCDE Security taskbar entry exists"
+else
+    bad "SCDE Security taskbar entry exists (got $(taskcount 'SCDE Security'))"
+fi
+if [ "$(tasklist | wc -w)" = "2" ]; then
+    ok "exactly two taskbar entries"
+else
+    bad "exactly two taskbar entries ($(tasklist | wc -w))"
+fi
+
+# 3. showing an already open window must never duplicate its entry
+xdotool windowactivate "$FM"; sleep 0.4
+xdotool windowactivate "$SG"; sleep 0.4
+xdotool windowactivate "$FM"; sleep 0.4
+xdotool windowactivate "$SG"; sleep 0.4
+if [ "$(tasklist | wc -w)" = "2" ] &&
+   [ "$(taskcount 'scde-fm')" = "1" ] &&
+   [ "$(taskcount 'SCDE Security')" = "1" ]; then
+    ok "showing already open windows keeps exactly one entry each"
+else
+    bad "showing already open windows keeps exactly one entry each ($(tasklist | wc -w) entries)"
+fi
+
+# 4. minimising keeps the entry, hiding the window
+if [ -n "${FM:-}" ]; then xdotool windowactivate "$FM"; sleep 0.4; fi
+xdotool key alt+Down; sleep 0.6
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    bad "Alt+Down hides the file manager"
+else
+    ok "Alt+Down hides the file manager"
+fi
+if [ "$(taskcount 'scde-fm')" = "1" ]; then
+    ok "hidden File Manager keeps its taskbar entry"
+else
+    bad "hidden File Manager keeps its taskbar entry"
+fi
+
+# 5. clicking the entry restores and focuses the window
+xdotool mousemove "$TX1" "$TPANY"; sleep 0.25
+xdotool click 1; sleep 0.6
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    ok "taskbar click restores the File Manager"
+else
+    bad "taskbar click restores the File Manager"
+fi
+FM=$(xdotool search --onlyvisible --name '^scde-fm' 2>/dev/null | head -1)
+if [ "$(xdotool getwindowfocus 2>/dev/null)" = "$FM" ]; then
+    ok "taskbar click focuses the File Manager"
+else
+    bad "taskbar click focuses the File Manager (got $(xdotool getwindowfocus 2>/dev/null), want $FM)"
+fi
+
+# 6. closing the File Manager drops only its entry
+if [ -n "${FM:-}" ]; then xdotool windowactivate "$FM"; sleep 0.4; fi
+xdotool key Escape; sleep 0.6
+if [ "$(taskcount 'scde-fm')" = "0" ]; then
+    ok "closing the File Manager removes its taskbar entry"
+else
+    bad "closing the File Manager removes its taskbar entry"
+fi
+if [ "$(taskcount 'SCDE Security')" = "1" ]; then
+    ok "the other taskbar entry is untouched"
+else
+    bad "the other taskbar entry is untouched"
+fi
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    bad "File Manager window is gone after close"
+else
+    ok "File Manager window is gone after close"
+fi
+
+# 7. Alt+F4 closes the security center and drops its entry
+SG=$(xdotool search --onlyvisible --name '^SCDE Security' 2>/dev/null | head -1)
+if [ -n "${SG:-}" ]; then xdotool windowactivate "$SG"; sleep 0.5; fi
+xdotool key alt+F4; sleep 0.7
+if [ "$(taskcount 'SCDE Security')" = "0" ]; then
+    ok "Alt+F4 removes the SCDE Security taskbar entry"
+else
+    bad "Alt+F4 removes the SCDE Security taskbar entry"
+fi
+if [ "$(tasklist | wc -w)" = "0" ]; then
+    ok "task list is empty after closing both"
+else
+    bad "task list is empty after closing both ($(tasknames | tr '\n' ';'))"
+fi
+
+# 8. reopening brings back exactly one entry per application
+xdotool key alt+e; sleep 0.7
+xdotool key alt+s; sleep 0.7
+if [ "$(taskcount 'scde-fm')" = "1" ]; then
+    ok "exactly one File Manager entry after reopen"
+else
+    bad "exactly one File Manager entry after reopen"
+fi
+if [ "$(taskcount 'SCDE Security')" = "1" ]; then
+    ok "exactly one SCDE Security entry after reopen"
+else
+    bad "exactly one SCDE Security entry after reopen"
+fi
+if [ "$(tasklist | wc -w)" = "2" ]; then
+    ok "exactly two entries after reopening both"
+else
+    bad "exactly two entries after reopening both ($(tasklist | wc -w))"
+fi
+
+# 9. the second entry belongs to the security center
+xdotool mousemove "$TX2" "$TPANY"; sleep 0.25
+xdotool click 1; sleep 0.6
+SG=$(xdotool search --onlyvisible --name '^SCDE Security' 2>/dev/null | head -1)
+if [ "$(xdotool getwindowfocus 2>/dev/null)" = "$SG" ]; then
+    ok "taskbar click focuses the SCDE Security window"
+else
+    bad "taskbar click focuses the SCDE Security window (got $(xdotool getwindowfocus 2>/dev/null), want ${SG:-?})"
+fi
+
+# 10. show desktop hides both, both entries stay, restore brings them back
+xdotool key alt+d; sleep 0.7
+if [ "$(taskcount 'scde-fm')" = "1" ] && [ "$(taskcount 'SCDE Security')" = "1" ]; then
+    ok "show desktop keeps both taskbar entries"
+else
+    bad "show desktop keeps both taskbar entries"
+fi
+xdotool key alt+d; sleep 0.7
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1 &&
+   xdotool search --onlyvisible --name '^SCDE Security' >/dev/null 2>&1; then
+    ok "show desktop restores both windows"
+else
+    bad "show desktop restores both windows"
+fi
+
+# leave a clean desktop behind: close both, entry by entry
+SG=$(xdotool search --onlyvisible --name '^SCDE Security' 2>/dev/null | head -1)
+if [ -n "${SG:-}" ]; then
+    xdotool windowactivate "$SG"; sleep 0.4
+    xdotool key Escape; sleep 0.5
+fi
+FM=$(xdotool search --onlyvisible --name '^scde-fm' 2>/dev/null | head -1)
+if [ -n "${FM:-}" ]; then
+    xdotool windowactivate "$FM"; sleep 0.4
+    xdotool key Escape; sleep 0.5
+fi
+if [ "$(tasklist | wc -w)" = "0" ]; then
+    ok "desktop left with an empty taskbar"
+else
+    bad "desktop left with an empty taskbar ($(tasknames | tr '\n' ';'))"
+fi
+
+# --------------------------------------- 19. Harbor redesign regression
+log "[19] Harbor redesign: FM sidebar + search, Security cards, wallpaper"
+# File Manager geometry on this screen: 860x600, centred.
+# sidebar = left 184 px, toolbar search box = right 150 px of the 36 px bar.
+xdotool key alt+e; sleep 0.7
+FM=$(xdotool search --onlyvisible --name '^scde-fm' 2>/dev/null | head -1)
+if [ -n "${FM:-}" ]; then ok "Harbor FM opens"; else bad "Harbor FM opens"; fi
+check "Harbor FM keeps its 860 px width" \
+    sh -c "[ -n '${FM:-}' ] && xwininfo -id $FM | grep -qE 'Width: +860'"
+FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
+if [ "$FMNAME" = "scde-fm: $HOME" ]; then
+    ok "Harbor FM opens in HOME"
+else
+    bad "Harbor FM opens in HOME (got '$FMNAME')"
+fi
+FXX=$(geom_x "$FM"); FYY=$(geom_y "$FM")
+
+# search box lives at the right end of the toolbar (36 px tall)
+xdotool mousemove $((FXX + 777)) $((FYY + 44)); sleep 0.25
+xdotool click 1; sleep 0.3
+xdotool type --delay 30 "fmdir"; sleep 0.6
+FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
+case "$FMNAME" in
+    *"[filter 'fmdir': 1]"*) ok "search filter narrows to one match" ;;
+    *) bad "search filter narrows to one match (got '$FMNAME')" ;;
+esac
+
+# Escape clears an active filter but keeps the window open
+xdotool key Escape; sleep 0.5
+FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
+if [ "$FMNAME" = "scde-fm: $HOME" ]; then
+    ok "Escape clears the search filter"
+else
+    bad "Escape clears the search filter (got '$FMNAME')"
+fi
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    ok "clearing the filter keeps the FM open"
+else
+    bad "clearing the filter keeps the FM open"
+fi
+
+# double click on the first visible row ("..") with the sidebar present:
+# exercises the offset list click mapping, ascends to the parent
+xdotool mousemove $((FXX + 400)) $((FYY + 74)); sleep 0.25
+xdotool click --repeat 2 --delay 150 1; sleep 0.7
+FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
+if [ "$FMNAME" = "scde-fm: $WORK" ]; then
+    ok "list click mapping works beside the sidebar"
+else
+    bad "list click mapping works beside the sidebar (got '$FMNAME')"
+fi
+
+# sidebar "Home" row (first place row) navigates back to HOME
+xdotool mousemove $((FXX + 90)) $((FYY + 102)); sleep 0.25
+xdotool click 1; sleep 0.6
+FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
+if [ "$FMNAME" = "scde-fm: $HOME" ]; then
+    ok "sidebar Home navigates to HOME"
+else
+    bad "sidebar Home navigates to HOME (got '$FMNAME')"
+fi
+
+# search + Return descends into the match
+xdotool mousemove $((FXX + 777)) $((FYY + 44)); sleep 0.25
+xdotool click 1; sleep 0.3
+xdotool type --delay 30 "fmdir"; sleep 0.6
+xdotool key Return; sleep 0.6
+FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
+case "$FMNAME" in
+    *"/fmdir"*) ok "search + Return descends into the match" ;;
+    *) bad "search + Return descends into the match (got '$FMNAME')" ;;
+esac
+xdotool key Escape; sleep 0.5
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    bad "Escape closes the Harbor FM"
+else
+    ok "Escape closes the Harbor FM"
+fi
+
+# Security Center keeps its card size, title and taskbar entry
+xdotool key alt+s; sleep 0.7
+SG=$(xdotool search --onlyvisible --name '^SCDE Security' 2>/dev/null | head -1)
+if [ -n "${SG:-}" ]; then ok "Harbor Security Center opens"; else bad "Harbor Security Center opens"; fi
+check "Security Center keeps its 600 px card width" \
+    sh -c "[ -n '${SG:-}' ] && xwininfo -id $SG | grep -qE 'Width: +600'"
+check "Security Center keeps its 640 px card height" \
+    sh -c "[ -n '${SG:-}' ] && xwininfo -id $SG | grep -qE 'Height: +640'"
+if [ "$(taskcount 'SCDE Security')" = "1" ]; then
+    ok "Harbor Security keeps one taskbar entry"
+else
+    bad "Harbor Security keeps one taskbar entry"
+fi
+if [ -n "${SG:-}" ]; then xdotool windowactivate "$SG"; sleep 0.4; fi
+xdotool key Escape; sleep 0.5
+if [ "$(tasklist | wc -w)" = "0" ]; then
+    ok "Harbor Security closes cleanly"
+else
+    bad "Harbor Security closes cleanly ($(tasknames | tr '\n' ';'))"
+fi
+
+# design tokens stay in the source (guards against accidental reverts)
+check "Harbor accent in the palette" grep -q "#7c9cbf" "$ROOT/src/config.c"
+check "FM places sidebar in the source" grep -q "place_names" "$ROOT/src/fm.c"
+check "FM search filter in the source" grep -q "sbuf" "$ROOT/src/fm.c"
+check "Security cards in the source" grep -q "sg_card" "$ROOT/src/security_gui.c"
+check "wallpaper motif in the source" grep -q "Harbor signature" "$ROOT/src/main.c"
+
+# gradient wallpaper: restart with distinct stops, sample two flat points
+kill -TERM "$SCDE_PID" 2>/dev/null
+for i in $(seq 1 50); do kill -0 "$SCDE_PID" 2>/dev/null || break; sleep 0.1; done
+wait "$SCDE_PID" 2>/dev/null
+SCDE_PID=""
+sed -i 's/^wallpaper_top=.*/wallpaper_top=#262e3b/; s/^wallpaper_bottom=.*/wallpaper_bottom=#12151b/' "$HOME/.config/scde/config"
+"$BIN" >"$WORK/scde8.log" 2>&1 &
+SCDE_PID=$!
+sleep 0.9
+if kill -0 "$SCDE_PID" 2>/dev/null; then ok "restarts with the Harbor gradient"; else bad "restarts with the Harbor gradient"; fi
+chan() { printf '%d' "0x${1:$((2 + $2 * 2)):2}"; }
+TOP=$("$PIXELBIN" 700 40 2>/dev/null | tr -d '\n')
+BOT=$("$PIXELBIN" 700 730 2>/dev/null | tr -d '\n')
+if near "$(chan "$TOP" 0)" 37 5 && near "$(chan "$TOP" 1)" 45 5 && near "$(chan "$TOP" 2)" 58 5; then
+    ok "gradient top reads back ($TOP)"
+else
+    bad "gradient top reads back ($TOP, want ~0x252d3a)"
+fi
+if near "$(chan "$BOT" 0)" 19 5 && near "$(chan "$BOT" 1)" 23 5 && near "$(chan "$BOT" 2)" 29 5; then
+    ok "gradient bottom reads back ($BOT)"
+else
+    bad "gradient bottom reads back ($BOT, want ~0x13171d)"
+fi
+if [ "$TOP" != "$BOT" ]; then
+    ok "wallpaper is a real gradient, not flat"
+else
+    bad "wallpaper is a real gradient, not flat"
 fi
 
 # ------------------------------------------------------------- summary

@@ -414,8 +414,10 @@ int scde_bait_create(int kind, const char *leaf)
         done += (size_t)w;
         left -= (size_t)w;
     }
+    /* fchmod on the descriptor we just wrote, never chmod() on the path:
+       the file cannot be swapped for a link underneath an open fd */
+    fchmod(fd, mode_for(kind));     /* never executable */
     close(fd);
-    chmod(full, mode_for(kind));     /* never executable */
 
     memset(e, 0, sizeof(*e));
     e->used = 1;
@@ -530,14 +532,30 @@ int scde_bait_check(void)
                             "recreated", SCDE_TRUST_UNKNOWN);
             continue;
         }
-        /* executable bit appeared: someone wants to run the decoy */
-        if ((st.st_mode & 0111) != 0) {
+        /* executable bit appeared: someone wants to run the decoy.
+         * Never chmod through a symlink: an attacker-swapped link must not
+         * let us change the mode of an arbitrary target file. */
+        if ((st.st_mode & 0111) != 0 && !S_ISLNK(st.st_mode)) {
+            int wfd = open(e->path, O_RDONLY | O_NOFOLLOW);
+
             bait_hits_total++;
             new_hits++;
             audit_with_meta(SCDE_AUDIT_BAIT_EXECUTION_ATTEMPT, e->id,
                             85, "exec-bit", SCDE_TRUST_UNKNOWN);
-            chmod(e->path, mode_for(e->kind));  /* back to inert */
+            if (wfd >= 0) {
+                fchmod(wfd, mode_for(e->kind));  /* back to inert */
+                close(wfd);
+            }
             e->mode = mode_for(e->kind);
+        } else if (S_ISLNK(st.st_mode)) {
+            /* a link where a decoy should be: report, never touch it */
+            bait_hits_total++;
+            new_hits++;
+            audit_with_meta(SCDE_AUDIT_BAIT_MODIFIED, e->id, 60,
+                            "replaced-by-symlink", SCDE_TRUST_UNKNOWN);
+            e->size = st.st_size;
+            e->mtime = st.st_mtime;
+            e->mode = st.st_mode & 07777;
         } else if (st.st_size != e->size || st.st_mtime != e->mtime) {
             e->size = st.st_size;
             e->mtime = st.st_mtime;

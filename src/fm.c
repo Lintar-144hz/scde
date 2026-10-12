@@ -2,9 +2,10 @@
 /*
  * SCDE - built-in file manager (pure Xlib, no toolkit)
  *
- * Toolbar: Up / Back / Home / New Folder / Refresh + path bar.
- * List: icons, name, size, type.  Double-click opens directories and
- * files (images -> viewer, video/audio -> player, rest -> xdg-open).
+ * Harbor layout: sidebar places (Home, Desktop, Documents, ...), toolbar
+ * with Up / Back / Home / New Folder / Refresh + path field + search,
+ * readable list (icon, name, size, type).  Double-click opens directories
+ * and files (images -> viewer, video/audio -> player, rest -> xdg-open).
  * Right-click: Open / Rename / Delete / Properties / Set as wallpaper.
  */
 #include "scde.h"
@@ -25,9 +26,12 @@
 #define FM_TOOL_H   36
 #define FM_SB_W     14
 #define FM_PAD      8
+#define FM_SIDE_W   184
+#define FM_SEARCH_W 150
 #define FM_NAME_MAX 512
 #define FM_PATH_MAX 1024
 #define FM_MAX_BTNS 6
+#define FM_PLACES   7
 
 #define FM_MODE_NORMAL  0
 #define FM_MODE_EDIT    1
@@ -73,8 +77,15 @@ static char ibuf[FM_NAME_MAX];
 static int n_btn;
 static int btn_x[FM_MAX_BTNS], btn_w[FM_MAX_BTNS];
 static int tool_path_x, tool_path_w;
-static int list_y0, list_y1, list_w, rows;
-static int hover_btn, hover_close;
+static int search_x, search_w;
+static int list_x0, list_y0, list_y1, list_w, rows;
+static int hover_btn, hover_close, hover_side, hover_search;
+static int search_focus;
+static char sbuf[96];
+
+/* visible-row map for the search filter (identity when idle) */
+static int *vis_idx;
+static int n_vis, vis_cap;
 
 static int ctx_n, ctx_ids[8], ctx_idx;
 static int ctx_x, ctx_y, ctx_w, ctx_h, ctx_target, ctx_row;
@@ -160,6 +171,133 @@ static void utf8_pop(char *s)
     s[len] = '\0';
 }
 
+/* ------------------------------------------------------ sidebar places -- */
+
+static const char *const place_names[FM_PLACES] = {
+    "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures",
+    "Videos"
+};
+
+/* index 0 resolves to $HOME itself, the rest to $HOME/<name> */
+static void place_path(int i, char *out, size_t size)
+{
+    const char *home = getenv("HOME");
+
+    if (!home || !*home)
+        home = "/";
+    if (i == 0)
+        str_copy(out, size, home);
+    else
+        snprintf(out, size, "%s/%s", home, place_names[i]);
+}
+
+static int place_selected(int i)
+{
+    char p[FM_PATH_MAX];
+    size_t len;
+
+    place_path(i, p, sizeof(p));
+    len = strlen(p);
+    if (strcmp(cwd, p) == 0)
+        return 1;
+    if (i > 0 && strncmp(cwd, p, len) == 0 && cwd[len] == '/')
+        return 1;
+    if (i == 0 && cwd[0] != '\0') {
+        int j;
+
+        /* Home catches everything under $HOME not claimed above */
+        for (j = 1; j < FM_PLACES; j++) {
+            char q[FM_PATH_MAX];
+            size_t ql;
+
+            place_path(j, q, sizeof(q));
+            ql = strlen(q);
+            if (strcmp(cwd, q) == 0)
+                return 0;
+            if (strncmp(cwd, q, ql) == 0 && cwd[ql] == '/')
+                return 0;
+        }
+        if (strncmp(cwd, p, len) == 0 && (cwd[len] == '/' || cwd[len] == '\0'))
+            return 1;
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------- search filter -- */
+
+static int match_query_ci(const char *name, const char *q)
+{
+    size_t qlen;
+    const char *p;
+
+    if (!q || !*q)
+        return 1;
+    qlen = strlen(q);
+    for (p = name; *p; p++) {
+        size_t i;
+
+        for (i = 0; i < qlen; i++) {
+            char a = p[i], b = q[i];
+
+            if (a >= 'A' && a <= 'Z')
+                a = (char)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z')
+                b = (char)(b - 'A' + 'a');
+            if (a == '\0' || a != b)
+                break;
+        }
+        if (i == qlen)
+            return 1;
+    }
+    return 0;
+}
+
+/* rebuild the visible map after reload / query change; keeps selection
+   only when the selected entry itself survives the filter */
+static void fm_refilter(void)
+{
+    int i, keep = -1, found = 0;
+
+    if (vis_cap < n_ents) {
+        int ncap = n_ents > 0 ? n_ents : 128;
+        int *p = realloc(vis_idx, (size_t)ncap * sizeof(int));
+
+        if (!p)
+            return;
+        vis_idx = p;
+        vis_cap = ncap;
+    }
+    n_vis = 0;
+    for (i = 0; i < n_ents; i++) {
+        int match = match_query_ci(ents[i].name, sbuf);
+
+        if (i == sel) {
+            keep = n_vis;
+            found = match;
+        }
+        if (match)
+            vis_idx[n_vis++] = i;
+    }
+    if (n_vis == 0)
+        return;
+    if (found && keep >= 0 && keep < n_vis) {
+        /* selection survived: scroll it into view */
+        if (keep < scroll)
+            scroll = keep;
+        if (keep >= scroll + rows)
+            scroll = keep - rows + 1;
+    } else {
+        /* selected entry was filtered out (or the list was reloaded):
+           fall back to the first visible entry */
+        sel = vis_idx[0];
+        scroll = 0;
+    }
+    if (scroll > n_vis - rows)
+        scroll = n_vis - rows;
+    if (scroll < 0)
+        scroll = 0;
+}
+
 /* ------------------------------------------------------------- loading -- */
 
 static int cmp_entry(const void *a, const void *b)
@@ -173,11 +311,17 @@ static int cmp_entry(const void *a, const void *b)
 
 static void fm_set_name(void)
 {
-    char title[FM_PATH_MAX + 32];
+    char title[FM_PATH_MAX + 160];
 
     if (fm_win == None)
         return;
-    snprintf(title, sizeof(title), "scde-fm: %s", cwd);
+    /* keep the "scde-fm: <cwd>" prefix (tests match it); the filter
+       suffix is a stable hook for humans and regression tests alike */
+    if (sbuf[0] != '\0')
+        snprintf(title, sizeof(title), "scde-fm: %s  [filter '%s': %d]",
+                 cwd, sbuf, n_vis);
+    else
+        snprintf(title, sizeof(title), "scde-fm: %s", cwd);
     XStoreName(sc.dpy, fm_win, title);
 }
 
@@ -255,23 +399,64 @@ static void fm_reload(void)
         sel = 0;
     if (scroll > n_ents)
         scroll = 0;
+    fm_refilter();
+    fm_set_name();
 }
 
+static int fm_vis_row_of_sel(void)
+{
+    int i;
+
+    for (i = 0; i < n_vis; i++)
+        if (vis_idx[i] == sel)
+            return i;
+    return -1;
+}
+
+/* idx is a visible row (identity when the filter is idle) */
 static void fm_select(int idx)
 {
+    int span;
+
+    /* filter with no matches: nothing to select, keep the view stable */
+    if (n_vis == 0 && sbuf[0] != '\0')
+        return;
+    span = n_vis > 0 ? n_vis : n_ents;
+
     if (idx < 0)
         idx = 0;
-    if (idx >= n_ents)
-        idx = n_ents - 1;
-    sel = idx;
-    if (sel < scroll)
-        scroll = sel;
-    if (sel >= scroll + rows)
-        scroll = sel - rows + 1;
-    if (scroll > n_ents - rows)
-        scroll = n_ents - rows;
+    if (idx >= span)
+        idx = span - 1;
+    if (n_vis > 0)
+        sel = vis_idx[idx];
+    else
+        sel = idx;
+    if (idx < scroll)
+        scroll = idx;
+    if (idx >= scroll + rows)
+        scroll = idx - rows + 1;
+    if (scroll > span - rows)
+        scroll = span - rows;
     if (scroll < 0)
         scroll = 0;
+}
+
+/* select by entry index, resolving through the visible map */
+static void fm_select_ent(int eidx)
+{
+    int i;
+
+    if (n_vis <= 0) {
+        fm_select(eidx);
+        return;
+    }
+    for (i = 0; i < n_vis; i++) {
+        if (vis_idx[i] == eidx) {
+            fm_select(i);
+            return;
+        }
+    }
+    fm_select(0);
 }
 
 static int fm_cd(const char *dir)
@@ -289,9 +474,14 @@ static int fm_cd(const char *dir)
         str_copy(hist[n_hist++], sizeof(hist[0]), cwd);
     str_copy(cwd, sizeof(cwd), real);
     free(real);
+    /* a new directory gets a fresh view: the filter belongs to its folder */
+    sbuf[0] = '\0';
+    search_focus = 0;
     fm_reload();
     sel = 0;
     scroll = 0;
+    if (n_vis > 0)
+        sel = vis_idx[0];
     fm_set_name();
     return 1;
 }
@@ -361,11 +551,21 @@ static void fm_layout(void)
         n_btn++;
         x += w + 6;
     }
+    /* Harbor toolbar: buttons left, path flexes, search docks right */
+    search_w = FM_SEARCH_W;
+    if (search_w > fw / 3)
+        search_w = fw / 3;
+    search_x = fw - FM_PAD - search_w;
     tool_path_x = x + 4;
-    tool_path_w = fw - tool_path_x - FM_PAD;
+    tool_path_w = search_x - 8 - tool_path_x;
     if (tool_path_w < 40)
         tool_path_w = 40;
 
+    list_x0 = FM_SIDE_W;
+    if (list_x0 > fw - FM_SB_W - 120)
+        list_x0 = fw - FM_SB_W - 120;
+    if (list_x0 < 0)
+        list_x0 = 0;
     list_y0 = FM_TITLE_H + FM_TOOL_H;
     list_y1 = fh - (sc.font_height + 12);
     if (list_y1 < list_y0 + fm_row_h())
@@ -386,18 +586,39 @@ static void fm_draw_icon(int x, int ycenter, const FmEntry *e)
     if (h < 14)
         iy = ycenter - 6;
     if (e->is_dir) {
+        /* Harbor folder: tab + calm body, same 16x11 footprint */
         XSetForeground(sc.dpy, sc.gc, C_FOLDER);
         XFillRectangle(sc.dpy, fm_win, sc.gc, x + 1, iy - 3, 7, 3);
         XFillRectangle(sc.dpy, fm_win, sc.gc, x, iy, 16, 11);
+        XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 1, iy + 1,
+                       14, 1);
     } else {
+        /* Harbor file: page with a folded corner + kind stripe */
         XSetForeground(sc.dpy, sc.gc, C_PAGE);
         XFillRectangle(sc.dpy, fm_win, sc.gc, x + 1, iy - 2, 13, 16);
         XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 2, 7, 2);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 6, 7, 2);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 9, iy - 2, 5, 5);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 4, 7, 1);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 7, 7, 1);
         XSetForeground(sc.dpy, sc.gc, kind_color(e));
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 8, iy + 9, 5, 4);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 10, 7, 3);
     }
+}
+
+/* rounded chip painted onto the toolbar tone: cut corners read as a soft
+   dock button without a compositor */
+static void fm_chip(int x, int y, int wd, int hg, unsigned long fg)
+{
+    int cut = 3;
+
+    if (wd <= 2 * cut || hg <= 2 * cut)
+        return;
+    XSetForeground(sc.dpy, sc.gc, fg);
+    XFillRectangle(sc.dpy, fm_win, sc.gc, x + cut, y, (unsigned)(wd - 2 * cut),
+                   (unsigned)hg);
+    XFillRectangle(sc.dpy, fm_win, sc.gc, x, y + cut, (unsigned)wd,
+                   (unsigned)(hg - 2 * cut));
 }
 
 static void fm_draw_button(int i, int hovered)
@@ -409,35 +630,131 @@ static void fm_draw_button(int i, int hovered)
     int bh = sc.font_height + 10;
     int bl;
 
-    XSetForeground(sc.dpy, sc.gc,
-                   hovered ? cfg.col_btn_hover : cfg.col_btn_inactive);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, btn_x[i], by, (unsigned)btn_w[i],
-                   (unsigned)bh);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, fm_win, sc.gc, btn_x[i], by, (unsigned)btn_w[i] - 1,
-                   (unsigned)bh - 1);
+    /* quiet chip: tone shift on hover, hairline only while hovered */
+    fm_chip(btn_x[i], by, btn_w[i], bh,
+            hovered ? cfg.col_btn_hover : cfg.col_menu_bg);
+    if (hovered) {
+        XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
+        XDrawRectangle(sc.dpy, fm_win, sc.gc, btn_x[i], by,
+                       (unsigned)(btn_w[i] - 1), (unsigned)(bh - 1));
+    }
     bl = by + (bh + sc.font_ascent - sc.font_descent) / 2;
-    draw_text(fm_win, btn_x[i] + 10, bl, cfg.col_menu_fg, labels[i]);
+    draw_text(fm_win, btn_x[i] + 10, bl,
+              hovered ? 0xedf0f5UL : cfg.col_menu_fg, labels[i]);
 }
 
 static void fm_draw_scrollbar(void)
 {
     int track_h = list_y1 - list_y0;
-    int max_scroll = n_ents - rows;
+    int span = n_vis > 0 ? n_vis : n_ents;
+    int max_scroll = span - rows;
     int thumb_h, thumb_y;
 
     XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
     XFillRectangle(sc.dpy, fm_win, sc.gc, list_w, list_y0, (unsigned)FM_SB_W,
                    (unsigned)track_h);
-    if (n_ents <= rows || max_scroll <= 0)
+    if (span <= rows || max_scroll <= 0)
         return;
-    thumb_h = track_h * rows / n_ents;
+    thumb_h = track_h * rows / span;
     if (thumb_h < 24)
         thumb_h = 24;
     thumb_y = list_y0 + (track_h - thumb_h) * scroll / max_scroll;
     XSetForeground(sc.dpy, sc.gc, cfg.col_btn_active);
     XFillRectangle(sc.dpy, fm_win, sc.gc, list_w + 3, thumb_y,
                    (unsigned)(FM_SB_W - 6), (unsigned)thumb_h);
+}
+
+/* Harbor search field: inset box, lens mark, placeholder or query + caret */
+static void fm_draw_search(void)
+{
+    int by = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2;
+    int bh = sc.font_height + 8;
+    int bl = by + (bh + sc.font_ascent - sc.font_descent) / 2;
+    int tx = search_x + 22;
+
+    XSetForeground(sc.dpy, sc.gc,
+                   search_focus ? cfg.col_btn_hover : cfg.col_btn_inactive);
+    XFillRectangle(sc.dpy, fm_win, sc.gc, search_x, by, (unsigned)search_w,
+                   (unsigned)bh);
+    XSetForeground(sc.dpy, sc.gc,
+                   search_focus ? cfg.col_border_focus
+                                : cfg.col_border_unfocus);
+    XDrawRectangle(sc.dpy, fm_win, sc.gc, search_x, by,
+                   (unsigned)(search_w - 1), (unsigned)(bh - 1));
+    /* lens */
+    XSetForeground(sc.dpy, sc.gc, cfg.col_title_fg_inactive);
+    XDrawArc(sc.dpy, fm_win, sc.gc, search_x + 7, by + bh / 2 - 4, 7, 7, 0,
+             360 * 64);
+    XDrawLine(sc.dpy, fm_win, sc.gc, search_x + 12, by + bh / 2 + 2,
+              search_x + 16, by + bh / 2 + 6);
+    if (sbuf[0] != '\0') {
+        int cx;
+
+        draw_text_clip(fm_win, tx, search_x + search_w - 6, bl,
+                       cfg.col_menu_fg, sbuf);
+        if (search_focus) {
+            cx = tx + text_width(sbuf) + 1;
+            if (cx > search_x + search_w - 6)
+                cx = search_x + search_w - 6;
+            XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+            XFillRectangle(sc.dpy, fm_win, sc.gc, cx, bl - sc.font_ascent, 1,
+                           (unsigned)(sc.font_ascent + sc.font_descent));
+        }
+    } else {
+        draw_text_clip(fm_win, tx, search_x + search_w - 6, bl,
+                       cfg.col_title_fg_inactive, "Search");
+    }
+}
+
+static int fm_side_row_h(void)
+{
+    int h = sc.font_height + 12;
+
+    return h < 26 ? 26 : h;
+}
+
+/* Harbor places sidebar: quiet two-tone column, selected pill, hover */
+static void fm_draw_sidebar(void)
+{
+    int rh = fm_side_row_h();
+    int y = list_y0 + 4;
+    int i;
+
+    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
+    XFillRectangle(sc.dpy, fm_win, sc.gc, 0, list_y0, (unsigned)list_x0,
+                   (unsigned)(list_y1 - list_y0));
+    draw_text(fm_win, FM_PAD + 2, y + sc.font_ascent,
+              cfg.col_title_fg_inactive, "Places");
+    y += sc.font_height + 8;
+    for (i = 0; i < FM_PLACES; i++) {
+        int selrow = place_selected(i);
+        int hov = hover_side == i;
+        int bl = y + (rh + sc.font_ascent - sc.font_descent) / 2;
+
+        if (selrow) {
+            XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
+            XFillRectangle(sc.dpy, fm_win, sc.gc, 4, y,
+                           (unsigned)(list_x0 - 8), (unsigned)rh);
+        } else if (hov) {
+            XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
+            XFillRectangle(sc.dpy, fm_win, sc.gc, 4, y,
+                           (unsigned)(list_x0 - 8), (unsigned)rh);
+        }
+        /* folder tick */
+        XSetForeground(sc.dpy, sc.gc,
+                       selrow ? 0xedf0f5UL : C_FOLDER);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, FM_PAD + 4, bl - 8, 6, 2);
+        XFillRectangle(sc.dpy, fm_win, sc.gc, FM_PAD + 3, bl - 6, 12, 8);
+        draw_text_clip(fm_win, FM_PAD + 22, list_x0 - 8, bl,
+                       selrow ? 0xedf0f5UL : cfg.col_menu_fg,
+                       place_names[i]);
+        y += rh;
+        if (y + rh > list_y1)
+            break;
+    }
+    /* separator between sidebar and list */
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
+    XDrawLine(sc.dpy, fm_win, sc.gc, list_x0, list_y0, list_x0, list_y1);
 }
 
 static void fm_draw_ctx(void)
@@ -476,27 +793,42 @@ static void fm_draw(void)
     if (!fm_win || !fm_is_open)
         return;
 
-    /* title bar */
+    /* Harbor/macOS title: calm close dot on the left, centred title */
     XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
     XFillRectangle(sc.dpy, fm_win, sc.gc, 0, 0, (unsigned)fw,
                    (unsigned)FM_TITLE_H);
+    {
+        int d = 12, ox = 8, oy = (FM_TITLE_H - d) / 2;
+
+        XSetForeground(sc.dpy, sc.gc, 0xc07a7aUL);
+        XFillArc(sc.dpy, fm_win, sc.gc, ox, oy, (unsigned)d, (unsigned)d, 0,
+                 360 * 64);
+        if (hover_close) {
+            XSetForeground(sc.dpy, sc.gc, 0xedf0f5UL);
+            XDrawArc(sc.dpy, fm_win, sc.gc, ox - 2, oy - 2, (unsigned)(d + 4),
+                     (unsigned)(d + 4), 0, 360 * 64);
+        }
+        XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
+        XDrawLine(sc.dpy, fm_win, sc.gc, ox + 4, oy + 4, ox + 8, oy + 8);
+        XDrawLine(sc.dpy, fm_win, sc.gc, ox + 4, oy + 8, ox + 8, oy + 4);
+    }
     bl = (FM_TITLE_H + sc.font_ascent - sc.font_descent) / 2;
     snprintf(buf, sizeof(buf), "Files  %s", cwd);
-    draw_text_clip(fm_win, FM_PAD, fw - FM_TITLE_H - 6, bl,
-                   cfg.col_title_fg, buf);
-    XSetForeground(sc.dpy, sc.gc,
-                   hover_close ? cfg.col_close_hover : cfg.col_title_bg);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, fw - FM_TITLE_H + 1, 0,
-                   (unsigned)(FM_TITLE_H - 2), (unsigned)(FM_TITLE_H - 1));
-    XSetForeground(sc.dpy, sc.gc, cfg.col_title_fg);
-    XDrawLine(sc.dpy, fm_win, sc.gc, fw - FM_TITLE_H + 8,
-              FM_TITLE_H / 2 - 4, fw - FM_TITLE_H + FM_TITLE_H - 9,
-              FM_TITLE_H / 2 + 4);
-    XDrawLine(sc.dpy, fm_win, sc.gc, fw - FM_TITLE_H + 8,
-              FM_TITLE_H / 2 + 4, fw - FM_TITLE_H + FM_TITLE_H - 9,
-              FM_TITLE_H / 2 - 4);
+    {
+        int left = FM_TITLE_H + 4;
+        int avail = fw - FM_TITLE_H - 10 - left;
+        char shown[256];
 
-    /* toolbar */
+        if (avail > 40) {
+            fit_text(shown, sizeof(shown), buf, avail);
+            draw_text(fm_win, left + (avail - text_width(shown)) / 2, bl,
+                      cfg.col_title_fg, shown);
+        }
+    }
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+    XFillRectangle(sc.dpy, fm_win, sc.gc, 0, FM_TITLE_H - 1, (unsigned)fw, 1);
+
+    /* toolbar: buttons, path field, search field */
     XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
     XFillRectangle(sc.dpy, fm_win, sc.gc, 0, FM_TITLE_H, (unsigned)fw,
                    (unsigned)FM_TOOL_H);
@@ -506,46 +838,60 @@ static void fm_draw(void)
     XFillRectangle(sc.dpy, fm_win, sc.gc, tool_path_x,
                    FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2,
                    (unsigned)tool_path_w, (unsigned)(sc.font_height + 8));
+    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
+    XDrawRectangle(sc.dpy, fm_win, sc.gc, tool_path_x,
+                   FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2,
+                   (unsigned)(tool_path_w - 1),
+                   (unsigned)(sc.font_height + 7));
     bl = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2 +
          (sc.font_height + 8 + sc.font_ascent - sc.font_descent) / 2;
     draw_text_clip(fm_win, tool_path_x + 6, tool_path_x + tool_path_w - 4,
-                   bl, cfg.col_border_focus, cwd);
+                   bl, cfg.col_menu_fg, cwd);
+    fm_draw_search();
 
-    /* list */
+    /* sidebar + list */
+    fm_draw_sidebar();
     XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, 0, list_y0, (unsigned)list_w,
+    XFillRectangle(sc.dpy, fm_win, sc.gc, list_x0, list_y0,
+                   (unsigned)(list_w - list_x0),
                    (unsigned)(list_y1 - list_y0));
     for (i = 0; i < rows; i++) {
-        int idx = scroll + i;
+        int vrow = scroll + i;
+        int idx;
         int y = list_y0 + i * rowh;
         int baseline;
         FmEntry *e;
         char sz[32];
         int type_x = list_w - 8 - 58;
         int sz_right = type_x - 12;
+        int icon_x = list_x0 + 8;
+        int text_x = list_x0 + 32;
 
-        if (idx >= n_ents)
+        if (vrow >= n_vis)
             break;
+        idx = vis_idx[vrow];
+        if (idx < 0 || idx >= n_ents)
+            continue;
         e = &ents[idx];
         if (idx == sel) {
             XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, 0, y, (unsigned)list_w,
-                           (unsigned)rowh);
+            XFillRectangle(sc.dpy, fm_win, sc.gc, list_x0, y,
+                           (unsigned)(list_w - list_x0), (unsigned)rowh);
         } else if (idx == hover) {
             XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, 0, y, (unsigned)list_w,
-                           (unsigned)rowh);
+            XFillRectangle(sc.dpy, fm_win, sc.gc, list_x0, y,
+                           (unsigned)(list_w - list_x0), (unsigned)rowh);
         }
         baseline = y + (rowh + sc.font_ascent - sc.font_descent) / 2;
-        fm_draw_icon(8, baseline, e);
+        fm_draw_icon(icon_x, baseline, e);
         {
             char shown[FM_NAME_MAX];
-            int maxw = sz_right - 74 - 32;
+            int maxw = sz_right - text_x - 42 - 32;
 
             if (maxw < 40)
                 maxw = 40;
             fit_text(shown, sizeof(shown), e->name, maxw);
-            draw_text(fm_win, 32, baseline, cfg.col_menu_fg, shown);
+            draw_text(fm_win, text_x, baseline, cfg.col_menu_fg, shown);
         }
         if (e->is_dir) {
             sz[0] = '\0';
@@ -566,6 +912,10 @@ static void fm_draw(void)
                       kind_label(e));
         }
     }
+    if (sbuf[0] != '\0' && n_vis == 0)
+        draw_text(fm_win, list_x0 + 12,
+                  list_y0 + (rowh + sc.font_ascent - sc.font_descent) / 2,
+                  cfg.col_title_fg_inactive, "No matches");
     fm_draw_scrollbar();
 
     /* status bar / input line */
@@ -601,15 +951,27 @@ static void fm_draw(void)
 
             if (n_ents == 0) {
                 snprintf(buf, sizeof(buf), "Empty folder");
+            } else if (sbuf[0] != '\0' && n_vis == 0) {
+                snprintf(buf, sizeof(buf), "%d items   |   no matches for '%s'",
+                         n_ents, sbuf);
             } else if (sel >= 0 && sel < n_ents) {
-                if (ents[sel].is_dir)
-                    snprintf(buf, sizeof(buf), "%d items   |   %s/",
-                             n_ents, ents[sel].name);
-                else {
-                    fmt_size(sz, sizeof(sz), ents[sel].size);
-                    snprintf(buf, sizeof(buf), "%d items   |   %s   %s   %s",
-                             n_ents, ents[sel].name, kind_label(&ents[sel]),
-                             sz);
+                if (sbuf[0] != '\0')
+                    snprintf(buf, sizeof(buf), "%d of %d   |   ",
+                             n_vis, n_ents);
+                else
+                    snprintf(buf, sizeof(buf), "%d items   |   ", n_ents);
+                {
+                    size_t used = strlen(buf);
+
+                    if (ents[sel].is_dir)
+                        snprintf(buf + used, sizeof(buf) - used, "%s/",
+                                 ents[sel].name);
+                    else {
+                        fmt_size(sz, sizeof(sz), ents[sel].size);
+                        snprintf(buf + used, sizeof(buf) - used,
+                                 "%s   %s   %s", ents[sel].name,
+                                 kind_label(&ents[sel]), sz);
+                    }
                 }
             } else {
                 snprintf(buf, sizeof(buf), "%d items", n_ents);
@@ -738,7 +1100,7 @@ static void fm_delete_sel(void)
         msgbox_show("Delete failed", msg);
     }
     fm_reload();
-    fm_select(sel);
+    fm_select_ent(sel);
     mode = FM_MODE_NORMAL;
     fm_draw();
 }
@@ -795,7 +1157,7 @@ static void fm_edit_commit(void)
             fm_reload();
             for (i = 0; i < n_ents; i++) {
                 if (strcmp(ents[i].name, ibuf) == 0) {
-                    fm_select(i);
+                    fm_select_ent(i);
                     break;
                 }
             }
@@ -812,7 +1174,7 @@ static void fm_edit_commit(void)
             fm_reload();
             for (i = 0; i < n_ents; i++) {
                 if (strcmp(ents[i].name, ibuf) == 0) {
-                    fm_select(i);
+                    fm_select_ent(i);
                     break;
                 }
             }
@@ -824,7 +1186,7 @@ static void fm_edit_commit(void)
 
 /* --------------------------------------------------------------- menus -- */
 
-static void fm_ctx_show(int row, int x, int y)
+static void fm_ctx_show(int vrow, int x, int y)
 {
     static const int dir_acts[] = { ACT_OPEN, ACT_RENAME, ACT_DELETE,
                                     ACT_PROPS, -1 };
@@ -833,7 +1195,11 @@ static void fm_ctx_show(int row, int x, int y)
     static const int root_acts[] = { ACT_OPEN, ACT_PROPS, -1 };
     const int *acts;
     int i, ih = sc.font_height + 8;
+    int row;
 
+    if (vrow < 0 || vrow >= n_vis)
+        return;
+    row = vis_idx[vrow];
     if (row < 0 || row >= n_ents)
         return;
     if (strcmp(ents[row].name, "..") == 0)
@@ -856,7 +1222,7 @@ static void fm_ctx_show(int row, int x, int y)
     for (i = 0; acts[i] >= 0 && ctx_n < 8; i++)
         ctx_ids[ctx_n++] = acts[i];
     ctx_target = row;
-    ctx_row = row;
+    ctx_row = vrow;
     ctx_idx = 0;
     ctx_w = 190;
     ctx_h = ctx_n * ih + 6;
@@ -866,12 +1232,12 @@ static void fm_ctx_show(int row, int x, int y)
         ctx_x = fw - ctx_w - 2;
     if (ctx_y + ctx_h > list_y1 - 2)
         ctx_y = list_y1 - ctx_h - 2;
-    if (ctx_x < 2)
-        ctx_x = 2;
+    if (ctx_x < list_x0 + 2)
+        ctx_x = list_x0 + 2;
     if (ctx_y < list_y0 + 2)
         ctx_y = list_y0 + 2;
     mode = FM_MODE_CTX;
-    fm_select(row);
+    fm_select(vrow);
     fm_draw();
 }
 
@@ -913,10 +1279,13 @@ void fm_show(void)
 {
     if (fm_is_open) {
         fm_reload();
-        fm_select(sel);
+        fm_select_ent(sel);
         fm_draw();
         XMapRaised(sc.dpy, fm_win);
-        XSetInputFocus(sc.dpy, fm_win, RevertToPointerRoot, CurrentTime);
+        focus_track(fm_win);
+        taskbar_register(fm_win, TASK_APP_FM, "File Manager");
+        taskbar_set_hidden(fm_win, 0);
+        panel_update();
         XFlush(sc.dpy);
         return;
     }
@@ -948,13 +1317,19 @@ void fm_show(void)
     fm_reload();
     sel = 0;
     scroll = 0;
+    if (n_vis > 0)
+        sel = vis_idx[0];
     mode = FM_MODE_NORMAL;
-    hover = hover_btn = hover_close = -1;
+    hover = hover_btn = hover_close = hover_side = hover_search = -1;
+    search_focus = 0;
     last_click_i = -1;
     fm_set_name();
     fm_is_open = 1;
     XMapRaised(sc.dpy, fm_win);
-    XSetInputFocus(sc.dpy, fm_win, RevertToPointerRoot, CurrentTime);
+    focus_track(fm_win);
+    taskbar_register(fm_win, TASK_APP_FM, "File Manager");
+    taskbar_set_hidden(fm_win, 0);
+    panel_update();
     XFlush(sc.dpy);
     fm_draw();
     log_msg("fm: opened %s (%d entries)", cwd, n_ents);
@@ -967,14 +1342,44 @@ void fm_show_path(const char *path)
     fm_show();
 }
 
+/*
+ * Hide the window but keep its taskbar entry (minimise semantics): the
+ * entry stays and a click on it brings the window back.
+ */
 void fm_hide(void)
 {
     if (!fm_is_open)
         return;
     fm_is_open = 0;
     mode = FM_MODE_NORMAL;
+    focus_drop(fm_win);
+    /* focus falls back to the last focused client window, if any */
+    if (sc.focused && !sc.focused->minimized)
+        focus_track(sc.focused->win);
+    taskbar_register(fm_win, TASK_APP_FM, "File Manager");
+    taskbar_set_hidden(fm_win, 1);
+    panel_update();
     XUnmapWindow(sc.dpy, fm_win);
     XFlush(sc.dpy);
+}
+
+/*
+ * Close the window and drop its taskbar entry.  The X window object is
+ * kept for a fast reopen; reopening registers exactly one fresh entry.
+ */
+void fm_close(void)
+{
+    if (fm_win == None)
+        return;
+    if (fm_is_open) {
+        fm_is_open = 0;
+        mode = FM_MODE_NORMAL;
+        focus_drop(fm_win);
+        XUnmapWindow(sc.dpy, fm_win);
+        XFlush(sc.dpy);
+    }
+    taskbar_unregister(fm_win);
+    panel_update();
 }
 
 int fm_open(void)
@@ -992,7 +1397,11 @@ void fm_cleanup(void)
     free(ents);
     ents = NULL;
     n_ents = ents_cap = 0;
+    free(vis_idx);
+    vis_idx = NULL;
+    n_vis = vis_cap = 0;
     if (fm_win != None) {
+        taskbar_unregister(fm_win);
         XDestroyWindow(sc.dpy, fm_win);
         fm_win = None;
     }
@@ -1013,9 +1422,10 @@ int fm_expose(XExposeEvent *ev)
 static int fm_sb_click(int x, int y)
 {
     int track_h = list_y1 - list_y0;
-    int max_scroll = n_ents - rows;
+    int span = n_vis > 0 ? n_vis : n_ents;
+    int max_scroll = span - rows;
 
-    if (n_ents <= rows || max_scroll <= 0)
+    if (span <= rows || max_scroll <= 0)
         return 0;
     if (y < list_y0 || y > list_y1 || x < list_w || x >= fw)
         return 0;
@@ -1023,27 +1433,46 @@ static int fm_sb_click(int x, int y)
         int rel = y - list_y0;
         int new_s;
 
-        new_s = rel * n_ents / track_h - rows / 2;
+        new_s = rel * span / track_h - rows / 2;
         if (new_s > max_scroll)
             new_s = max_scroll;
         if (new_s < 0)
             new_s = 0;
         if (new_s != scroll) {
+            int vsel = fm_vis_row_of_sel();
+
             scroll = new_s;
-            if (sel < scroll)
-                sel = scroll;
-            if (sel > scroll + rows - 1)
-                sel = scroll + rows - 1;
+            if (vsel >= 0) {
+                if (vsel < scroll)
+                    fm_select(scroll);
+                if (vsel > scroll + rows - 1)
+                    fm_select(scroll + rows - 1);
+            }
             fm_draw();
         }
     }
     return 1;
 }
 
+/* sidebar hit test: -1 when the pointer is not on a place row */
+static int fm_side_hit(int x, int y)
+{
+    int rh = fm_side_row_h();
+    int top = list_y0 + 4 + sc.font_height + 8;
+    int i;
+
+    if (x < 0 || x >= list_x0 || y < top || y >= list_y1)
+        return -1;
+    i = (y - top) / rh;
+    if (i < 0 || i >= FM_PLACES)
+        return -1;
+    return i;
+}
+
 int fm_button(XButtonEvent *ev)
 {
     int in_fm;
-    int row, y, i;
+    int y, i;
 
     if (!fm_win)
         return 0;
@@ -1057,7 +1486,7 @@ int fm_button(XButtonEvent *ev)
         return 0;
     }
     if (ev->button == Button1)
-        XSetInputFocus(sc.dpy, fm_win, RevertToPointerRoot, CurrentTime);
+        focus_track(fm_win);
 
     /* context menu open: only menu clicks count */
     if (mode == FM_MODE_CTX) {
@@ -1076,9 +1505,9 @@ int fm_button(XButtonEvent *ev)
             return 1;
     }
 
-    /* title bar close */
-    if (ev->y < FM_TITLE_H && ev->x >= fw - FM_TITLE_H) {
-        fm_hide();
+    /* title bar close (left dot, macOS style) */
+    if (ev->y < FM_TITLE_H && ev->x < FM_TITLE_H) {
+        fm_close();
         return 1;
     }
     if (ev->y < FM_TITLE_H) {
@@ -1087,18 +1516,27 @@ int fm_button(XButtonEvent *ev)
         return 1;
     }
 
-    /* toolbar buttons */
+    /* toolbar: search field first, then buttons */
     if (ev->y >= FM_TITLE_H && ev->y < FM_TITLE_H + FM_TOOL_H) {
         int id = -1;
 
+        if (ev->button == Button1 && ev->x >= search_x &&
+            ev->x < search_x + search_w) {
+            search_focus = 1;
+            fm_draw();
+            return 1;
+        }
+        search_focus = 0;
         for (i = 0; i < n_btn; i++) {
             if (ev->x >= btn_x[i] && ev->x < btn_x[i] + btn_w[i]) {
                 id = i;
                 break;
             }
         }
-        if (id < 0)
+        if (id < 0) {
+            fm_draw();
             return 1;
+        }
         if (id == BTN_UP) {
             fm_cd_parent();
             fm_draw();
@@ -1114,8 +1552,12 @@ int fm_button(XButtonEvent *ev)
                     if (r) {
                         str_copy(cwd, sizeof(cwd), r);
                         free(r);
+                        sbuf[0] = '\0';
+                        search_focus = 0;
                         fm_reload();
                         sel = scroll = 0;
+                        if (n_vis > 0)
+                            sel = vis_idx[0];
                         fm_set_name();
                         fm_draw();
                     }
@@ -1133,7 +1575,7 @@ int fm_button(XButtonEvent *ev)
             fm_draw();
         } else if (id == BTN_REFRESH) {
             fm_reload();
-            fm_select(sel);
+            fm_select_ent(sel);
             fm_draw();
         }
         return 1;
@@ -1141,16 +1583,23 @@ int fm_button(XButtonEvent *ev)
 
     /* wheel scrolling over the list */
     if (ev->button == Button4 || ev->button == Button5) {
-        if (ev->y >= list_y0 && ev->y < list_y1 && ev->x < list_w) {
+        int span = n_vis > 0 ? n_vis : n_ents;
+
+        if (ev->y >= list_y0 && ev->y < list_y1 && ev->x < list_w &&
+            ev->x >= list_x0) {
+            int vsel = fm_vis_row_of_sel();
+
             scroll += (ev->button == Button4) ? -3 : 3;
-            if (scroll > n_ents - rows)
-                scroll = n_ents - rows;
+            if (scroll > span - rows)
+                scroll = span - rows;
             if (scroll < 0)
                 scroll = 0;
-            if (sel < scroll)
-                sel = scroll;
-            if (sel > scroll + rows - 1)
-                sel = scroll + rows - 1;
+            if (vsel >= 0) {
+                if (vsel < scroll)
+                    fm_select(scroll);
+                if (vsel > scroll + rows - 1)
+                    fm_select(scroll + rows - 1);
+            }
             fm_draw();
         }
         return 1;
@@ -1162,14 +1611,38 @@ int fm_button(XButtonEvent *ev)
         return 1;
     }
 
+    /* sidebar places */
+    if (ev->y >= list_y0 && ev->y < list_y1 && ev->x < list_x0) {
+        int p = fm_side_hit(ev->x, ev->y);
+
+        if (ev->button == Button1 && p >= 0) {
+            char dest[FM_PATH_MAX];
+
+            place_path(p, dest, sizeof(dest));
+            if (!fm_cd(dest)) {
+                char msg[FM_PATH_MAX + 64];
+
+                snprintf(msg, sizeof(msg), "Cannot open folder:\n%s",
+                         dest);
+                msgbox_show("Cannot open folder", msg);
+            }
+            fm_draw();
+        }
+        return 1;
+    }
+
     /* list rows */
     if (ev->y >= list_y0 && ev->y < list_y1 && ev->x < list_w) {
+        int vrow;
+        int eidx;
+
         y = ev->y - list_y0;
-        row = scroll + y / fm_row_h();
-        if (row < 0 || row >= n_ents)
+        vrow = scroll + y / fm_row_h();
+        if (vrow < 0 || vrow >= n_vis)
             return 1;
+        eidx = vis_idx[vrow];
         if (ev->button == Button3) {
-            fm_ctx_show(row, ev->x + 4, ev->y + 4);
+            fm_ctx_show(vrow, ev->x + 4, ev->y + 4);
             return 1;
         }
         if (ev->button != Button1)
@@ -1177,26 +1650,26 @@ int fm_button(XButtonEvent *ev)
         {
             Time t = ev->time;
 
-            if (row == last_click_i &&
+            if (vrow == last_click_i &&
                 (t - last_click_t) < 500) {   /* double click */
                 last_click_i = -1;
-                fm_select(row);
-                fm_open_idx(row);
+                fm_select(vrow);
+                fm_open_idx(eidx);
                 fm_draw();
                 return 1;
             }
             last_click_t = t;
-            last_click_i = row;
+            last_click_i = vrow;
         }
-        fm_select(row);
+        fm_select(vrow);
         fm_draw();
-        XSetInputFocus(sc.dpy, fm_win, RevertToPointerRoot, CurrentTime);
+        focus_track(fm_win);
         return 1;
     }
 
     /* status bar: clicking keeps focus for the edit line */
     if (ev->y >= list_y1) {
-        XSetInputFocus(sc.dpy, fm_win, RevertToPointerRoot, CurrentTime);
+        focus_track(fm_win);
         return 1;
     }
     return 1;
@@ -1204,7 +1677,7 @@ int fm_button(XButtonEvent *ev)
 
 int fm_motion(XMotionEvent *ev)
 {
-    int nb = -1, nc = 0, nr = -1, new_hover;
+    int nb = -1, nc = 0, nr = -1, ns = -1, nse = 0, new_hover;
     int x, y;
 
     if (!fm_win || ev->window != fm_win || !fm_is_open)
@@ -1212,7 +1685,7 @@ int fm_motion(XMotionEvent *ev)
     x = ev->x;
     y = ev->y;
 
-    if (y < FM_TITLE_H && x >= fw - FM_TITLE_H)
+    if (y < FM_TITLE_H && x < FM_TITLE_H)
         nc = 1;
     if (y >= FM_TITLE_H && y < FM_TITLE_H + FM_TOOL_H) {
         int i;
@@ -1223,11 +1696,17 @@ int fm_motion(XMotionEvent *ev)
                 break;
             }
         }
-    } else if (y >= list_y0 && y < list_y1 && x < list_w) {
-        int row = scroll + (y - list_y0) / fm_row_h();
+        if (x >= search_x && x < search_x + search_w)
+            nse = 1;
+    } else if (y >= list_y0 && y < list_y1) {
+        if (x < list_x0) {
+            ns = fm_side_hit(x, y);
+        } else if (x < list_w) {
+            int vrow = scroll + (y - list_y0) / fm_row_h();
 
-        if (row >= 0 && row < n_ents)
-            nr = row;
+            if (vrow >= 0 && vrow < n_vis)
+                nr = vis_idx[vrow];
+        }
     }
     if (mode == FM_MODE_CTX && x >= ctx_x && x < ctx_x + ctx_w &&
         y >= ctx_y && y < ctx_y + ctx_h) {
@@ -1242,11 +1721,14 @@ int fm_motion(XMotionEvent *ev)
             return 1;
         }
     }
-    new_hover = (nb < 0 && nc == 0) ? nr : -1;
-    if (new_hover != hover || nb != hover_btn || nc != hover_close) {
+    new_hover = (nb < 0 && nc == 0 && nse == 0 && ns < 0) ? nr : -1;
+    if (new_hover != hover || nb != hover_btn || nc != hover_close ||
+        ns != hover_side || nse != hover_search) {
         hover = new_hover;
         hover_btn = nb;
         hover_close = nc;
+        hover_side = ns;
+        hover_search = nse;
         fm_draw();
     }
     return 1;
@@ -1326,9 +1808,69 @@ void fm_key(XKeyEvent *ev)
         return;
     }
 
+    /* Ctrl+F focuses the search field from anywhere in normal mode */
+    if (mode == FM_MODE_NORMAL && ((sym == XK_f || sym == XK_F) &&
+                                   mod == ControlMask)) {
+        search_focus = 1;
+        fm_draw();
+        return;
+    }
+
+    /* search field input: printable text filters, navigation still moves */
+    if (mode == FM_MODE_NORMAL && search_focus && sym != XK_Tab &&
+        sym != XK_ISO_Left_Tab) {
+        if (sym == XK_Escape) {
+            if (sbuf[0] != '\0') {
+                sbuf[0] = '\0';
+                search_focus = 0;
+                fm_reload();
+                fm_select_ent(sel);
+                fm_set_name();
+                fm_draw();
+            } else {
+                search_focus = 0;
+                fm_close();
+            }
+            return;
+        }
+        if (sym == XK_Return || sym == XK_KP_Enter) {
+            if (n_vis > 0)
+                fm_open_idx(sel);
+            fm_draw();
+            return;
+        }
+        if (sym == XK_BackSpace) {
+            if (mod == ControlMask)
+                sbuf[0] = '\0';
+            else
+                utf8_pop(sbuf);
+            fm_reload();
+            fm_set_name();
+            fm_draw();
+            return;
+        }
+        if (sym == XK_u && mod == ControlMask) {
+            sbuf[0] = '\0';
+            fm_reload();
+            fm_set_name();
+            fm_draw();
+            return;
+        }
+        if (len > 0 && (unsigned char)buf[0] >= 0x20 && buf[0] != 0x7f &&
+            strlen(sbuf) + (size_t)len < sizeof(sbuf) - 1 &&
+            mod != ControlMask && mod != Mod1Mask) {
+            strcat(sbuf, buf);
+            fm_reload();
+            fm_set_name();
+            fm_draw();
+            return;
+        }
+        /* navigation keys fall through with focus kept */
+    }
+
     switch (sym) {
     case XK_Escape:
-        fm_hide();
+        fm_close();
         break;
     case XK_Return:
     case XK_KP_Enter:
@@ -1340,19 +1882,19 @@ void fm_key(XKeyEvent *ev)
         fm_draw();
         break;
     case XK_Up:
-        fm_select(sel - 1);
+        fm_select(fm_vis_row_of_sel() - 1);
         fm_draw();
         break;
     case XK_Down:
-        fm_select(sel + 1);
+        fm_select(fm_vis_row_of_sel() + 1);
         fm_draw();
         break;
     case XK_Prior:
-        fm_select(sel - rows);
+        fm_select(fm_vis_row_of_sel() - rows);
         fm_draw();
         break;
     case XK_Next:
-        fm_select(sel + rows);
+        fm_select(fm_vis_row_of_sel() + rows);
         fm_draw();
         break;
     case XK_Home:
@@ -1360,12 +1902,12 @@ void fm_key(XKeyEvent *ev)
         fm_draw();
         break;
     case XK_End:
-        fm_select(n_ents - 1);
+        fm_select((n_vis > 0 ? n_vis : n_ents) - 1);
         fm_draw();
         break;
     case XK_F5:
         fm_reload();
-        fm_select(sel);
+        fm_select_ent(sel);
         fm_draw();
         break;
     case XK_F2:
@@ -1394,7 +1936,7 @@ void fm_key(XKeyEvent *ev)
         if (mod == ControlMask) {
             show_hidden = !show_hidden;
             fm_reload();
-            fm_select(sel);
+            fm_select_ent(sel);
             fm_draw();
         }
         break;
