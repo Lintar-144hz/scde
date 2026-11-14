@@ -202,6 +202,18 @@ int taskbar_count(void)
     return n_tasks;
 }
 
+/* title of the focused entry for the menu bar (NULL when none has focus) */
+const char *taskbar_active_title(void)
+{
+    int i;
+
+    taskbar_sync();
+    for (i = 0; i < n_tasks; i++)
+        if (tasks[i].focused)
+            return tasks[i].title;
+    return NULL;
+}
+
 const TaskEntry *taskbar_at(int i)
 {
     if (i < 0 || i >= n_tasks)

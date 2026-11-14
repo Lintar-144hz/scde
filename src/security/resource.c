@@ -27,8 +27,11 @@ void scde_resource_defaults(scde_resource_limits_t *out)
 {
     if (!out)
         return;
-    out->ram_bytes = 512ul * 1024ul * 1024ul;   /* 512 MiB address space */
-    out->cpu_seconds = 30;                       /* 30 s CPU time */
+    /* 3 GiB sandbox ceiling per sandboxed process (RLIMIT_AS address
+     * space, kernel-enforced in the child before exec).  SCDE imposes no
+     * CPU quota of its own (cpu_seconds = 0: the host scheduler decides). */
+    out->ram_bytes = 3072ul * 1024ul * 1024ul;   /* 3072 MiB = 3 GiB */
+    out->cpu_seconds = 0;                         /* no SCDE CPU quota */
     out->nproc = 64;                             /* child processes */
     out->nofile = 128;                           /* open files */
     out->fsize_bytes = 256ul * 1024ul * 1024ul;  /* 256 MiB files */
@@ -69,6 +72,22 @@ static int clamp_rlimit(int res, rlim_t value)
     return 0;
 }
 
+/* cap an rlimit at value, but never raise an existing stricter hard
+   limit: both ends become min(hard, value) */
+static int cap_rlimit(int res, rlim_t value)
+{
+    struct rlimit rl;
+
+    if (getrlimit(res, &rl) != 0)
+        return -1;
+    if (rl.rlim_max == RLIM_INFINITY || rl.rlim_max > value)
+        rl.rlim_max = value;
+    rl.rlim_cur = rl.rlim_max;
+    if (setrlimit(res, &rl) != 0)
+        return -1;
+    return 0;
+}
+
 int scde_resource_apply(void)
 {
     scde_resource_limits_t lim;
@@ -103,12 +122,15 @@ int scde_resource_apply(void)
     }
     if (lim.ram_bytes > 0) {
 #ifdef RLIMIT_AS
-        if (clamp_rlimit(RLIMIT_AS, (rlim_t)lim.ram_bytes) != 0)
+        if (cap_rlimit(RLIMIT_AS, (rlim_t)lim.ram_bytes) != 0)
             failures++;
 #else
         failures++;
 #endif
     }
+    /* no SCDE CPU quota unless explicitly configured (cpu_seconds == 0
+       means the host scheduler decides; callers must not read a missing
+       quota as a guaranteed CPU share) */
     if (lim.cpu_seconds > 0) {
         if (clamp_rlimit(RLIMIT_CPU, (rlim_t)lim.cpu_seconds) != 0)
             failures++;
@@ -186,12 +208,17 @@ int scde_resource_constrain(pid_t pid, unsigned int grace_ms,
 int scde_resource_describe(char *out, size_t out_len)
 {
     scde_resource_limits_t lim;
+    char cpu[24];
 
     if (!out || out_len == 0)
         return SCDE_ERR_ARG;
     scde_resource_get(&lim);
-    snprintf(out, out_len, "ram=%luMB cpu=%us nproc=%lu fds=%lu fs=%luMB wall=%us",
-             lim.ram_bytes / (1024ul * 1024ul), lim.cpu_seconds,
+    if (lim.cpu_seconds > 0)
+        snprintf(cpu, sizeof(cpu), "cpu=%us", lim.cpu_seconds);
+    else
+        snprintf(cpu, sizeof(cpu), "cpu=none");
+    snprintf(out, out_len, "ram=%luMB %s nproc=%lu fds=%lu fs=%luMB wall=%us",
+             lim.ram_bytes / (1024ul * 1024ul), cpu,
              lim.nproc, lim.nofile, lim.fsize_bytes / (1024ul * 1024ul),
              lim.wall_seconds);
     return SCDE_OK;

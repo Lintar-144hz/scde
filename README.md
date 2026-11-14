@@ -65,17 +65,20 @@ Only `libX11` and libc are required at run time.
 ### Implemented
 
 * **Window management** — reparenting title-bar frames with a macOS-like
-  chrome (muted traffic-light dots on the left, centred title),
+  chrome (red/yellow/green dots on the left, glyphs on hover, title beside
+  the controls),
   focus-follows-mouse
   (or click-to-focus with `focus_follows_mouse=0`), `Alt`+drag move,
   `Alt`+right-drag / edge resize, double-click title to maximize,
   `Alt+Up`/`Alt+Down`,
   half-screen snap, `Alt+Tab` / `Shift+Alt+Tab`, `Alt+F4`, `Alt+D`
   (show desktop), `_NET_WM_STATE_FULLSCREEN`, `ConfigureRequest` handling.
-* **Panel** — dock-style launcher button, rounded task tiles with a running
-  dot (accent dot for the focused app), two-line
-  clock, show-desktop strip, three decorative status glyphs
-  (network / volume / battery).
+* **Panel** — Harbor shell: a slim top menu bar (SCDE mark, active
+  application with About/Hide/Close, Window menu, Help menu, tray glyphs,
+  macOS-style clock) and a centered floating bottom dock (launcher tile,
+  coloured initial tiles, running dot under every app, accent dot for the
+  focused one; left click focuses/restores, middle click closes, right
+  click minimises).
 * **Application menu** — pinned entries plus every
   `/usr/share/applications/*.desktop`, compact and searchable (type to
   filter, arrows to move, `Enter` runs, `Esc` closes), `Alt+Space`.
@@ -96,11 +99,16 @@ Only `libX11` and libc are required at run time.
    with a live status pill, the protection mode (Always-on / Passive / Off),
    bounded scans (plugins / Desktop / Home), permission toggles and a
    scrollable security log.
-* **Built-in file manager** — `Alt+E`: places sidebar (Home, Desktop,
-  Documents, Downloads, …), toolbar with path field and live search filter
-  (`Ctrl+F`), navigate, open, rename (`F2`),
-  delete (confirmed), new folder (`Ctrl+N`), hidden files (`Ctrl+H`),
-  right-click menu (Open / Rename / Delete / Properties / Set as wallpaper).
+* **Sandbox resource limits** — every sandboxed process gets a 3 GiB RAM
+  ceiling (3072 MiB, `RLIMIT_AS` applied in the child before exec, capped
+  and never raised; configurable down via `sandbox_memory_mb`), while SCDE
+  imposes no CPU quota of its own — the host scheduler decides.
+* **Built-in file manager** — `Alt+E`, Finder-inspired: compact toolbar
+  with Back / Forward / Up, path field, live search filter (`Ctrl+F`),
+  Name/Size/Kind column headers, Favorites + Locations sidebar (Home,
+  Desktop, Documents, Downloads, …, Computer), navigate, open, rename
+  (`F2`), delete (confirmed), new folder (`Ctrl+N`), hidden files (`Ctrl+H`),
+  right-click menu, clear errors for unreadable folders.
 * **Media** — files are classified by extension and opened with an installed
   viewer: images → `feh`, video/music → `mpv`; `wallpaper=` in the config
   loads a background image.
@@ -108,7 +116,7 @@ Only `libX11` and libc are required at run time.
   reported and ignored, built-in defaults when the file is missing.
 * **Lifecycle** — single-instance `fcntl` lock, clean shutdown on
   `SIGINT`/`SIGTERM`/`SIGHUP` with clients reparented back to the root.
-* **Test suite** — 129 automated checks on Xvfb plus three small X test
+* **Test suite** — 146 automated checks on Xvfb plus three small X test
   clients.
 * **HAL** — a separate, dependency-free static library (`hal/libhal.a`)
   with GPU / Bluetooth / Audio APIs, Linux and Android backends, and its own
@@ -139,16 +147,16 @@ Not implemented yet — see [Roadmap](#roadmap).
 
 | Area | Behaviour |
 |---|---|
-| Look | Harbor theme with a macOS-like window chrome: reparented frame windows, calm charcoal gradient wallpaper with a quiet ellipse motif, dark title bar with muted traffic-light dots (close/min/max on the left) and a centred title, double-click title = maximize |
+| Look | Harbor theme with a macOS-like window chrome: reparented frame windows, calm charcoal gradient wallpaper with a quiet ellipse motif, dark title bar with red/yellow/green traffic-light dots on the left (glyphs on hover) and the title beside the controls, double-click title = maximize |
 | Window management | MapRequest, ConfigureRequest, DestroyNotify, UnmapNotify, focus-follows-mouse, fullscreen via `_NET_WM_STATE_FULLSCREEN` |
 | Move | `Alt` + Left-drag, or drag the title bar |
 | Resize | `Alt` + Right-drag, or drag a window edge (5 px) |
 | Close | `Alt+F4`, the left close dot (WM_DELETE_WINDOW, else XKillClient) |
 | Maximize / minimize | `Alt+Up` toggle, `Alt+Down`, the left maximise / minimise dots |
 | Snap | `Alt+Left` / `Alt+Right` half screen |
-| Show desktop | `Alt+D` or the strip at the far right of the panel |
+| Show desktop | `Alt+D` or the Window menu's Show Desktop entry |
 | Switch windows | `Alt+Tab`, `Shift+Alt+Tab` (wraps) |
-| Panel | Harbor dock-style taskbar: calm launcher mark, rounded task tiles with mini mark + label, close ✕ on each wide task button, a running dot under every app and an accent dot + lifted tile for the focused one, tray glyphs (network, volume, battery, Security shield), two-line clock, show-desktop strip |
+| Panel | Harbor shell: a slim top menu bar (SCDE mark, active application with About/Hide/Close, Window menu listing every window + Show Desktop, Help menu, tray glyphs for network / volume / battery / Security shield, macOS-style clock) and a centered floating bottom dock (launcher tile, one coloured initial tile per running application, running dot under every app, accent dot + lifted tile for the focused one; left click focuses/restores, middle click closes, right click minimises) |
 | App menu | pinned entries + every `/usr/share/applications/*.desktop`, type-to-search with icon tiles, `Alt+Space` or the launcher button |
 | Program detection | terminal / editor / browser picked from `PATH` (or your `terminal=`, `browser=` config); built-in menu entries are `@terminal`, `@editor`, `@files`, `@browser`, `@apps`, `@run`, `@desktop`, `@security`, `@logout` |
 | Missing program | a Plasma-style notice dialog tells you what to install instead of failing silently |
@@ -156,7 +164,7 @@ Not implemented yet — see [Roadmap](#roadmap).
 | Desktop shortcuts | `~/Desktop` on the wallpaper: click selects, double click opens (a `*.desktop` entry runs its `Exec=`), right click = icon menu, drag = rearrange (saved in `~/.local/share/scde/desktop.layout`); installed applications are shown as icons on the left half (`desktop_apps=1`) |
 | Command launcher | `Alt+F2` — runs a command, or opens a URL (`example.com`, `https://…`) in the detected browser |
 | Terminal | `Alt+Enter` (configurable) — starts the detected external terminal |
-| File manager | `Alt+E` — built in: places sidebar (Home, Desktop, Documents, …), toolbar + path field + live search filter, navigate, rename (F2), delete, new folder, right-click menu, hidden files (Ctrl+H) |
+| File manager | `Alt+E` — built in, Finder-inspired: toolbar with Back / Forward / Up / New Folder / Refresh, path field, live search filter, Name/Size/Kind column headers, Favorites + Locations sidebar (Home, Desktop, Documents, …), navigate, rename (F2), delete, new folder, right-click menu, hidden files (Ctrl+H), clear errors for unreadable folders |
 | Security Center | tray shield or launcher "Security Center": protection mode (Always-on starts the filesystem watcher), card layout with live status pill, scanner (plugins / Desktop / Home, bounded), permission toggles, scrollable security log with Clear |
 | Media | photos open with feh, video/music with mpv; `wallpaper=` in the config sets the background |
 | Config | `~/.config/scde/config` (key=value) |
@@ -164,7 +172,7 @@ Not implemented yet — see [Roadmap](#roadmap).
 | Single instance | `fcntl` lock file in `$XDG_CACHE_HOME/scde` (auto-released on crash) |
 
 Extra: `_NET_ACTIVE_WINDOW`, `_NET_CLIENT_LIST`, `_NET_SUPPORTED`,
-`_NET_SUPPORTING_WM_CHECK`, `WM_STATE`, window title tracking on the panel.
+`_NET_SUPPORTING_WM_CHECK`, `WM_STATE`, window title tracking in the menu bar.
 
 ---
 
@@ -185,7 +193,8 @@ scde/
 │   ├── main.c               X connection, setup, poll() loop, signals, lock
 │   ├── wm.c                 client list, frame windows, focus, close, drag
 │   ├── input.c              key/button grabs, Alt-drag, desktop clicks
-│   ├── panel.c              panel, task buttons, clock, status glyphs
+│   ├── panel.c              top menu bar (SCDE/app/Window/Help, tray, clock)
+│   ├── dock.c               floating bottom dock (launcher, app tiles, dots)
 │   ├── launcher.c           application menu + Alt+F2 prompt
 │   ├── desktop.c            desktop shortcuts: icons, menus, moving
 │   ├── fm.c                 built-in file manager
@@ -205,7 +214,7 @@ scde/
 │   │   └── backends/android/  Android detection + property/sysfs readers
 │   └── tests/               hal_smoke.c (182 checks), hal_info.c
 ├── tests/                   X11 test suite
-│   ├── run_tests.sh         129 checks on Xvfb (timeout-guarded by make)
+│   ├── run_tests.sh         146 checks on Xvfb (timeout-guarded by make)
 │   ├── api_test.c           App API tests (headless, 300 checks)
 │   ├── plugins/             badver/failinit test plugins
 │   ├── testclient.c         minimal X client used by the suite
@@ -435,8 +444,8 @@ Runs four real suites and reports each:
 1. **HAL** — `hal/tests/hal_smoke` (182 checks) and `hal/tests/hal_info`.
 2. **App API** — `tests/api_test` (headless, 300 checks).
 3. **Security boundary** — `tests/security_test`.
-4. **SCDE on Xvfb** — `tests/run_tests.sh` (129 checks): startup/single
-   instance, panel geometry, background colour, mapping and borders,
+4. **SCDE on Xvfb** — `tests/run_tests.sh` (146 checks): startup/single
+   instance, menu bar + dock geometry, background colour, mapping and borders,
    `_NET_CLIENT_LIST`, focus-follows-mouse, `Alt+Tab` both directions,
    `Alt+drag` move & resize, `ConfigureRequest`, `Alt+F4`, app menu
    open/close/run, `Alt+F2` prompt, help/version, SIGTERM shutdown + restart,
@@ -447,9 +456,11 @@ Runs four real suites and reports each:
    position, select / deselect by pixel, double click runs `Exec=`, icon
    context menu, New Folder from the desktop menu, drag rewrites the layout
    file), the taskbar registry for File Manager / SCDE Security (open,
-   minimise, restore, close, show-desktop), and the Harbor redesign (places
-   sidebar, live search filter, Security Center cards, gradient wallpaper,
-   dock running dots).
+   minimise, restore, close, show-desktop), the menu bar launcher menu, the
+   dock (growth, left-click restore, right-click minimise, shrink on close),
+   the sandbox memory config key, and the Harbor redesign (Favorites /
+   Locations sidebar, Back / Forward history, live search filter, column
+   headers, Security Center cards, gradient wallpaper, dock running dots).
 
 The X suite is wrapped in a hard timeout (default **300 s**, override with
 `make test TEST_TIMEOUT=600`) so it can never hang the build. It starts its
@@ -501,16 +512,15 @@ steps you need to run.
 `~/.config/scde/config` — see `config/scde-config.sample`:
 
 ```
-panel=bottom              # top | bottom
-panel_height=32
+panel_height=26           # slim top menu bar (menu bar top, dock bottom fixed)
 border_width=3            # frame border (>= 3 = usable resize grip)
 title_height=24           # Harbor title bar
 desktop_apps=1            # installed apps as desktop icons (left half)
 focus_follows_mouse=1
 show_clock=1
 show_tray=1
-show_desktop_btn=1
-clock_format=%H:%M
+sandbox_memory_mb=3072    # sandbox RAM ceiling per process (MiB, 3 GiB)
+clock_format=%a %b %d  %H:%M
 clock_date_format=%b %d   # second clock line (needs panel_height >= 30)
 terminal=xterm            # empty = auto-detect from PATH
 browser=                  # empty = auto-detect from PATH

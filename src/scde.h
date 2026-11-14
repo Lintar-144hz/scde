@@ -63,6 +63,7 @@ typedef struct {
     char font[128];
     char config_path[512];
     char wallpaper[512];               /* image path, empty = gradient */
+    int sandbox_memory_mb;             /* sandbox RAM ceiling (MiB) */
 
     /* colour strings (parsed after the display is open) */
     char s_background[32];
@@ -142,9 +143,18 @@ typedef struct {
 
     GC gc;
     XFontStruct *font;
+    XFontStruct *font_bold;
+    XFontStruct *font_small;
+    XFontStruct *font_mono;
     int font_ascent;
     int font_descent;
     int font_height;
+    int font_bold_ascent;
+    int font_bold_descent;
+    int font_small_ascent;
+    int font_small_descent;
+    int font_mono_ascent;
+    int font_mono_descent;
 
     Atom atom_wm_protocols;
     Atom atom_wm_delete;
@@ -169,8 +179,9 @@ typedef struct {
     int menu_item_count;
     char browser[128];
 
-    Window panel;
+    Window panel;                      /* top menu bar (Harbor shell) */
     int panel_w;
+    Window dock;                       /* floating bottom dock */
     Window menu;
     Window cmd;
 
@@ -223,6 +234,7 @@ int taskbar_internal_count(void);
 const TaskInternal *taskbar_internal_at(int i);
 void taskbar_activate(int i);
 void taskbar_close(int i);
+const char *taskbar_active_title(void); /* focused entry title or NULL */
 
 /* track the X window that currently owns the input focus */
 void focus_track(Window w);
@@ -246,6 +258,84 @@ void draw_text_clip(Window w, int x, int max_x, int baseline_y,
 void draw_win_glyph(Window w, int x, int y, int size, unsigned long fg,
                     unsigned long bg);
 int color_rgb(const char *str, int *r, int *g, int *b);
+
+/* ------------------------------------------------------------------- ui.c */
+
+typedef enum {
+    UI_ICON_GENERIC = 0,
+    UI_ICON_LAUNCHER,
+    UI_ICON_FILES,
+    UI_ICON_TERMINAL,
+    UI_ICON_BROWSER,
+    UI_ICON_SECURITY,
+    UI_ICON_SETTINGS
+} UiIconKind;
+
+enum { UI_LIGHT_CLOSE = 0, UI_LIGHT_MIN = 1, UI_LIGHT_MAX = 2 };
+
+void ui_load_fonts(void);
+void ui_cleanup_fonts(void);
+int text_width_font(XFontStruct *f, const char *s);
+int text_width_bold(const char *s);
+int text_width_small(const char *s);
+int text_width_mono(const char *s);
+void draw_text_font(Window w, XFontStruct *f, int x, int baseline_y,
+                    unsigned long color, const char *s);
+void draw_text_bold(Window w, int x, int baseline_y, unsigned long color,
+                    const char *s);
+void draw_text_small(Window w, int x, int baseline_y, unsigned long color,
+                     const char *s);
+void draw_text_mono(Window w, int x, int baseline_y, unsigned long color,
+                    const char *s);
+void draw_text_clip_font(Window w, XFontStruct *f, int x, int max_x,
+                         int baseline_y, unsigned long color, const char *s);
+unsigned long ui_mix(unsigned long a, unsigned long b, int pct);
+unsigned long ui_dim(unsigned long c, unsigned long bg);
+unsigned long ui_wallpaper_color(int y);
+unsigned long ui_accent(void);
+unsigned long ui_accent_soft(void);
+unsigned long ui_green(void);
+unsigned long ui_yellow(void);
+unsigned long ui_red(void);
+void ui_round_fill(Window w, int x, int y, int wd, int hg, int r,
+                   unsigned long color);
+void ui_round_outline(Window w, int x, int y, int wd, int hg, int r,
+                      unsigned long color);
+void ui_round_fill_gradient(Window w, int x, int y, int wd, int hg, int r,
+                            unsigned long top, unsigned long bottom);
+void ui_shape_round(Window w, int wd, int hg, int r);
+void ui_draw_traffic(Window w, int x, int cy, int active, int hover,
+                     int maximized, unsigned long bg);
+void ui_draw_folder(Window w, int x, int y, int size, int open);
+void ui_draw_file(Window w, int x, int y, int size, unsigned long accent);
+void ui_draw_app_icon(Window w, int kind, int x, int y, int size, int dim,
+                      const char *initial);
+void ui_draw_launcher_mark(Window w, int cx, int cy, int size,
+                           unsigned long fg);
+void ui_draw_chevron(Window w, int cx, int cy, int dir, unsigned long color,
+                     int size);
+void ui_draw_magnifier(Window w, int x, int y, int size,
+                       unsigned long color);
+void ui_draw_toggle(Window w, int x, int y, int wd, int hg, int on,
+                    int hover);
+void ui_draw_wifi(Window w, int x, int cy, unsigned long fg);
+void ui_draw_volume(Window w, int x, int cy, unsigned long fg);
+void ui_draw_battery(Window w, int x, int cy, unsigned long fg,
+                     unsigned long bg);
+void ui_draw_shield(Window w, int x, int cy, int size, unsigned long fg);
+void ui_draw_gear(Window w, int cx, int cy, int size, unsigned long fg);
+void ui_draw_house(Window w, int x, int cy, int size, unsigned long fg);
+void ui_draw_star(Window w, int cx, int cy, int size, unsigned long fg);
+void ui_draw_clock_icon(Window w, int cx, int cy, int size,
+                        unsigned long fg);
+void ui_draw_doc_icon(Window w, int x, int cy, int size, unsigned long fg);
+void ui_draw_download_icon(Window w, int cx, int cy, int size,
+                           unsigned long fg);
+void ui_draw_music_icon(Window w, int cx, int cy, int size, unsigned long fg);
+void ui_draw_image_icon(Window w, int x, int cy, int size, unsigned long fg);
+void ui_draw_film_icon(Window w, int x, int cy, int size, unsigned long fg);
+void ui_draw_trash_icon(Window w, int cx, int cy, int size, unsigned long fg);
+void ui_draw_drive_icon(Window w, int x, int cy, int size, unsigned long fg);
 
 /* ---------------------------------------------------------------- config.c */
 
@@ -308,6 +398,8 @@ void focus_client(Client *c);
 void unfocus_all(void);
 void close_client(Client *c);
 void cycle_windows(int dir);
+void active_minimize(void);     /* Alt+Down / menu "Hide" (internal apps too) */
+void active_close(void);        /* Alt+F4 / menu "Close" (internal apps too) */
 void client_maximize(Client *c, int on);
 void client_minimize(Client *c, int on);
 void show_desktop_toggle(void);
@@ -342,6 +434,8 @@ void selfdrag_window(Window win, XButtonEvent *ev, int *x, int *y,
 unsigned int strip_mods(unsigned int state);
 
 /* ---------------------------------------------------------------- panel.c */
+/* Harbor shell: slim top menu bar (sc.panel) + floating bottom dock
+   (sc.dock, dock.c).  panel_* keeps its historical names. */
 
 void panel_create(void);
 void panel_destroy(void);
@@ -352,7 +446,21 @@ int panel_button_press(XButtonEvent *ev);
 void panel_motion(XMotionEvent *ev);
 void panel_tick(void);
 int panel_timeout_ms(void);
-int panel_reserved(void);
+int menubar_h(void);            /* actual menu bar height (clamped) */
+int reserve_top(void);          /* space the menu bar occupies at the top */
+int reserve_bottom(void);       /* space the dock + margin occupies */
+
+/* ----------------------------------------------------------------- dock.c */
+
+void dock_create(void);
+void dock_destroy(void);
+void dock_update(void);
+void dock_raise(void);
+void dock_expose(XExposeEvent *ev);
+int dock_button_press(XButtonEvent *ev);
+void dock_motion(XMotionEvent *ev);
+int dock_reserved(void);        /* dock height + margin below the desktop */
+void dock_resample_bg(void);    /* wallpaper changed: re-sample corners */
 
 /* -------------------------------------------------------------- launcher.c */
 

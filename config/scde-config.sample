@@ -1,60 +1,64 @@
 # SCDE sample configuration - copy to ~/.config/scde/config
 # format: key=value   (lines starting with # are comments)
 
-# ---------------------------------------------------------------- layout
-# panel position: top or bottom
-panel=bottom
-panel_height=32
+# ---------------------------------------------------------------- shell
+# SCDE Harbor: a slim menu bar is always pinned to the top edge and a
+# floating dock sits centred above the bottom edge.  The legacy
+# panel=bottom/top key is accepted but ignored.
+panel_height=28
 
-# window frame border and Harbor title bar
-# border_width 3 makes the edge resize grip usable
-border_width=3
-title_height=24
+# window frame border and title bar
+border_width=1
+title_height=28
 
 # 1 = focus follows mouse, 0 = click to focus
 focus_follows_mouse=1
 
 # ---------------------------------------------------------------- desktop
-# SCDE Harbor theme: dark charcoal, soft white, calm blue-grey accent.
-# Quiet surfaces, one restrained accent, no neon.
-# solid colour fallback and the vertical gradient wallpaper
-background=#171b22
-wallpaper_top=#262e3b
-wallpaper_bottom=#12151b
+# macOS-inspired dark theme: graphite surfaces, soft white text and
+# system blue as the single accent.
+background=#0b0c10
+wallpaper_top=#222b46
+wallpaper_bottom=#08090e
 
-# accent colour: active window border, task bar underline, launcher mark
-border_focused=#7c9cbf
-border_unfocused=#2a313d
+border_focused=#3c3d46
+border_unfocused=#2a2b31
 
-# title bar colours (Harbor dark theme)
-title_bg=#28303d
-title_bg_inactive=#20262f
-title_fg=#edf0f5
-title_fg_inactive=#98a1b1
-title_hover=#313b49
-title_close_hover=#b04a4a
+title_bg=#303138
+title_bg_inactive=#26272d
+title_fg=#f5f5f7
+title_fg_inactive=#9a9aa2
+title_hover=#3a3b43
+title_close_hover=#e0443e
 
-# installed applications shown as icons on the desktop (right half)
-desktop_apps=1
+# installed applications shown as icons on the desktop
+desktop_apps=0
 
-# ---------------------------------------------------------------- panel
+# ---------------------------------------------------------------- menu bar
 show_clock=1
-clock_format=%H:%M
-# second clock line, needs panel_height >= 30
-clock_date_format=%b %d
+# macOS-style date + time at the right end of the menu bar
+clock_format=%a %d %b  %H:%M
+# optional second clock line (leave empty for a single macOS-style line)
+clock_date_format=
 show_tray=1
-show_desktop_btn=1
 
-panel_bg=#1d232d
-panel_fg=#dbe1ea
-button_active=#334052
-button_inactive=#262c37
-button_hover=#2f3a4a
+panel_bg=#24252c
+panel_fg=#f5f5f7
+button_active=#3a3b43
+button_inactive=#2b2c32
+button_hover=#34353c
 
 # application menu colours
-menu_bg=#222936
-menu_fg=#dbe1ea
-menu_selected=#38506b
+menu_bg=#24252c
+menu_fg=#f2f2f7
+menu_selected=#0a84ff
+
+# ------------------------------------------------- sandbox resource limits
+# RAM ceiling per sandboxed process (MiB).  3072 MiB = 3 GiB.
+# Enforced by the kernel (RLIMIT_AS in the child before exec); an
+# existing stricter hard limit is kept and never raised.  SCDE imposes
+# no CPU quota of its own - the host scheduler decides.
+sandbox_memory_mb=3072
 
 # ---------------------------------------------------------------- programs
 # terminal started with Alt+Enter and by the Terminal menu entry
@@ -67,8 +71,8 @@ browser=
 # image shown on the desktop (feh loads it)
 wallpaper=
 
-# font used by panel, menu and prompt (X core font)
-font=-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*
+# font used by the shell (X core font; empty = auto-detected sans font)
+font=
 
 # application menu entries: menu=Label|command
 # pinned above the .desktop applications scanned from /usr/share/applications

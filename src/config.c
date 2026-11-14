@@ -14,45 +14,46 @@ void config_defaults(Config *c)
 {
     memset(c, 0, sizeof(*c));
 
-    c->panel_top = 0;                    /* bottom panel (Harbor style) */
-    c->panel_height = 32;
-    c->border_width = 3;                /* >= 3 gives a usable resize grip */
-    c->title_height = 24;
+    c->panel_top = 0;                    /* legacy; Harbor shell is fixed:
+                                            menu bar top, dock bottom */
+    c->panel_height = 28;
+    c->border_width = 1;
+    c->title_height = 28;
+    c->sandbox_memory_mb = 3072;        /* sandbox RAM ceiling (MiB) */
     c->focus_follows_mouse = 1;
     c->show_clock = 1;
     c->show_tray = 1;
     c->show_desktop_btn = 1;
-    c->desktop_apps = 1;                /* installed apps on the desktop */
-    str_copy(c->clock_format, sizeof(c->clock_format), "%H:%M");
-    str_copy(c->clock_date_format, sizeof(c->clock_date_format), "%b %d");
+    c->desktop_apps = 0;
+    str_copy(c->clock_format, sizeof(c->clock_format), "%a %d %b  %H:%M");
+    str_copy(c->clock_date_format, sizeof(c->clock_date_format), "");
     str_copy(c->terminal, sizeof(c->terminal), "xterm");
     str_copy(c->browser, sizeof(c->browser), "");
-    str_copy(c->font, sizeof(c->font),
-             "-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*");
+    c->font[0] = '\0';
 
     /* SCDE Harbor palette: dark charcoal, soft white, calm blue-grey.
        Quiet surfaces, one restrained accent, no neon. */
-    str_copy(c->s_background, sizeof(c->s_background), "#171b22");
-    str_copy(c->s_wallpaper_top, sizeof(c->s_wallpaper_top), "#262e3b");
-    str_copy(c->s_wallpaper_bottom, sizeof(c->s_wallpaper_bottom), "#12151b");
-    str_copy(c->s_border_focus, sizeof(c->s_border_focus), "#7c9cbf");
-    str_copy(c->s_border_unfocus, sizeof(c->s_border_unfocus), "#2a313d");
-    str_copy(c->s_title_bg, sizeof(c->s_title_bg), "#28303d");
+    str_copy(c->s_background, sizeof(c->s_background), "#0b0c10");
+    str_copy(c->s_wallpaper_top, sizeof(c->s_wallpaper_top), "#222b46");
+    str_copy(c->s_wallpaper_bottom, sizeof(c->s_wallpaper_bottom), "#08090e");
+    str_copy(c->s_border_focus, sizeof(c->s_border_focus), "#3c3d46");
+    str_copy(c->s_border_unfocus, sizeof(c->s_border_unfocus), "#2a2b31");
+    str_copy(c->s_title_bg, sizeof(c->s_title_bg), "#303138");
     str_copy(c->s_title_bg_inactive, sizeof(c->s_title_bg_inactive),
-             "#20262f");
-    str_copy(c->s_title_fg, sizeof(c->s_title_fg), "#edf0f5");
+             "#26272d");
+    str_copy(c->s_title_fg, sizeof(c->s_title_fg), "#f5f5f7");
     str_copy(c->s_title_fg_inactive, sizeof(c->s_title_fg_inactive),
-             "#98a1b1");
-    str_copy(c->s_title_hover, sizeof(c->s_title_hover), "#313b49");
-    str_copy(c->s_close_hover, sizeof(c->s_close_hover), "#b04a4a");
-    str_copy(c->s_panel_bg, sizeof(c->s_panel_bg), "#1d232d");
-    str_copy(c->s_panel_fg, sizeof(c->s_panel_fg), "#dbe1ea");
-    str_copy(c->s_btn_active, sizeof(c->s_btn_active), "#334052");
-    str_copy(c->s_btn_inactive, sizeof(c->s_btn_inactive), "#262c37");
-    str_copy(c->s_btn_hover, sizeof(c->s_btn_hover), "#2f3a4a");
-    str_copy(c->s_menu_bg, sizeof(c->s_menu_bg), "#222936");
-    str_copy(c->s_menu_fg, sizeof(c->s_menu_fg), "#dbe1ea");
-    str_copy(c->s_menu_sel, sizeof(c->s_menu_sel), "#38506b");
+             "#9a9aa2");
+    str_copy(c->s_title_hover, sizeof(c->s_title_hover), "#3a3b43");
+    str_copy(c->s_close_hover, sizeof(c->s_close_hover), "#e0443e");
+    str_copy(c->s_panel_bg, sizeof(c->s_panel_bg), "#24252c");
+    str_copy(c->s_panel_fg, sizeof(c->s_panel_fg), "#f5f5f7");
+    str_copy(c->s_btn_active, sizeof(c->s_btn_active), "#3a3b43");
+    str_copy(c->s_btn_inactive, sizeof(c->s_btn_inactive), "#2b2c32");
+    str_copy(c->s_btn_hover, sizeof(c->s_btn_hover), "#34353c");
+    str_copy(c->s_menu_bg, sizeof(c->s_menu_bg), "#24252c");
+    str_copy(c->s_menu_fg, sizeof(c->s_menu_fg), "#f2f2f7");
+    str_copy(c->s_menu_sel, sizeof(c->s_menu_sel), "#0a84ff");
 }
 
 static int to_int(const char *v, int lo, int hi, int fallback)
@@ -124,8 +125,12 @@ int config_load(Config *c, const char *path)
         key = str_trim(s);
         val = str_trim(eq + 1);
 
-        if (strcmp(key, "panel") == 0)
-            c->panel_top = (strcmp(val, "top") == 0);
+        if (strcmp(key, "panel") == 0) {
+            /* deprecated: kept for old configs, the shell is fixed */
+            (void)val;
+        } else if (strcmp(key, "sandbox_memory_mb") == 0)
+            c->sandbox_memory_mb =
+                to_int(val, 128, 131072, c->sandbox_memory_mb);
         else if (strcmp(key, "panel_height") == 0)
             c->panel_height = to_int(val, 16, 64, c->panel_height);
         else if (strcmp(key, "border_width") == 0)
@@ -207,25 +212,25 @@ int config_load(Config *c, const char *path)
 
 int config_resolve_colors(Config *c)
 {
-    c->col_background = parse_color(c->s_background, 0x171b22);
-    c->col_wallpaper_top = parse_color(c->s_wallpaper_top, 0x262e3b);
-    c->col_wallpaper_bottom = parse_color(c->s_wallpaper_bottom, 0x12151b);
-    c->col_border_focus = parse_color(c->s_border_focus, 0x7c9cbf);
-    c->col_border_unfocus = parse_color(c->s_border_unfocus, 0x2a313d);
-    c->col_title_bg = parse_color(c->s_title_bg, 0x28303d);
-    c->col_title_bg_inactive = parse_color(c->s_title_bg_inactive, 0x20262f);
-    c->col_title_fg = parse_color(c->s_title_fg, 0xedf0f5);
-    c->col_title_fg_inactive = parse_color(c->s_title_fg_inactive, 0x98a1b1);
-    c->col_title_hover = parse_color(c->s_title_hover, 0x313b49);
-    c->col_close_hover = parse_color(c->s_close_hover, 0xb04a4a);
-    c->col_panel_bg = parse_color(c->s_panel_bg, 0x1d232d);
-    c->col_panel_fg = parse_color(c->s_panel_fg, 0xdbe1ea);
-    c->col_btn_active = parse_color(c->s_btn_active, 0x334052);
-    c->col_btn_inactive = parse_color(c->s_btn_inactive, 0x262c37);
-    c->col_btn_hover = parse_color(c->s_btn_hover, 0x2f3a4a);
-    c->col_menu_bg = parse_color(c->s_menu_bg, 0x222936);
-    c->col_menu_fg = parse_color(c->s_menu_fg, 0xdbe1ea);
-    c->col_menu_sel = parse_color(c->s_menu_sel, 0x38506b);
+    c->col_background = parse_color(c->s_background, 0x0b0c10);
+    c->col_wallpaper_top = parse_color(c->s_wallpaper_top, 0x222b46);
+    c->col_wallpaper_bottom = parse_color(c->s_wallpaper_bottom, 0x08090e);
+    c->col_border_focus = parse_color(c->s_border_focus, 0x3c3d46);
+    c->col_border_unfocus = parse_color(c->s_border_unfocus, 0x2a2b31);
+    c->col_title_bg = parse_color(c->s_title_bg, 0x303138);
+    c->col_title_bg_inactive = parse_color(c->s_title_bg_inactive, 0x26272d);
+    c->col_title_fg = parse_color(c->s_title_fg, 0xf5f5f7);
+    c->col_title_fg_inactive = parse_color(c->s_title_fg_inactive, 0x9a9aa2);
+    c->col_title_hover = parse_color(c->s_title_hover, 0x3a3b43);
+    c->col_close_hover = parse_color(c->s_close_hover, 0xe0443e);
+    c->col_panel_bg = parse_color(c->s_panel_bg, 0x24252c);
+    c->col_panel_fg = parse_color(c->s_panel_fg, 0xf5f5f7);
+    c->col_btn_active = parse_color(c->s_btn_active, 0x3a3b43);
+    c->col_btn_inactive = parse_color(c->s_btn_inactive, 0x2b2c32);
+    c->col_btn_hover = parse_color(c->s_btn_hover, 0x34353c);
+    c->col_menu_bg = parse_color(c->s_menu_bg, 0x24252c);
+    c->col_menu_fg = parse_color(c->s_menu_fg, 0xf2f2f7);
+    c->col_menu_sel = parse_color(c->s_menu_sel, 0x0a84ff);
     return 0;
 }
 

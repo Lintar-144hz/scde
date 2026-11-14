@@ -25,7 +25,7 @@
 
 #define SG_W 600
 #define SG_H 640
-#define SG_TITLE 24
+#define SG_TITLE 30
 #define SG_PAD 10
 #define SG_LOG_Y 522
 #define SG_LOG_ROW 16
@@ -50,7 +50,7 @@ static int sg_x, sg_y;                    /* dragged position */
 static SecBtn sg_btns[SG_MAX_BTNS];
 static int sg_nbtns;
 static int sg_hover = -1;
-static int sg_hover_close;
+static int sg_hover_light = -1;
 static int sg_log_off;
 static char sg_scan_status[196] = "choose a target to scan";
 
@@ -85,38 +85,35 @@ static void sg_btn(int x, int y, int w, int h, int id, const char *label)
 static void sg_paint_btn(const SecBtn *b, int active, int hover)
 {
     int cx = b->x + b->w / 2;
-    unsigned long bg = active ? cfg.col_btn_active
-                      : hover  ? cfg.col_btn_hover
-                               : cfg.col_btn_inactive;
+    unsigned long bg = active ? ui_accent()
+                      : hover  ? ui_mix(cfg.col_panel_bg, 0xffffffUL, 17)
+                               : ui_mix(cfg.col_panel_bg, 0xffffffUL, 10);
 
-    XSetForeground(sc.dpy, sc.gc, bg);
-    XFillRectangle(sc.dpy, sg_win, sc.gc, b->x, b->y, (unsigned)b->w,
-                   (unsigned)b->h);
-    /* Harbor: quiet hairline on every button, soft white on active */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, sg_win, sc.gc, b->x, b->y, (unsigned)b->w,
-                   (unsigned)b->h);
+    ui_round_fill(sg_win, b->x, b->y, b->w, b->h, 7, bg);
+    ui_round_outline(sg_win, b->x, b->y, b->w, b->h, 7,
+                     active ? ui_mix(ui_accent(), 0xffffffUL, 18)
+                            : ui_mix(cfg.col_panel_bg, 0xffffffUL, 17));
     draw_text(sg_win, cx - text_width(b->label) / 2,
               b->y + (b->h + sc.font_ascent - sc.font_descent) / 2,
-              active ? 0xedf0f5UL : cfg.col_menu_fg, b->label);
+              active ? 0xffffffUL : cfg.col_menu_fg, b->label);
 }
 
 /* Harbor card: menu-tone surface on the panel-tone window, hairline edge */
 static void sg_card(int y, int h)
 {
-    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-    XFillRectangle(sc.dpy, sg_win, sc.gc, SG_PAD, y,
-                   (unsigned)(SG_W - 2 * SG_PAD), (unsigned)h);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, sg_win, sc.gc, SG_PAD, y,
-                   (unsigned)(SG_W - 2 * SG_PAD - 1), (unsigned)(h - 1));
+    ui_round_fill(sg_win, SG_PAD, y, SG_W - 2 * SG_PAD, h, 12,
+                  ui_mix(cfg.col_panel_bg, 0xffffffUL, 7));
+    ui_round_outline(sg_win, SG_PAD, y, SG_W - 2 * SG_PAD, h, 12,
+                     ui_mix(cfg.col_panel_bg, 0xffffffUL, 14));
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_panel_bg, 0xffffffUL, 10));
+    XDrawLine(sc.dpy, sg_win, sc.gc, SG_PAD + 12, y + 26,
+              SG_W - SG_PAD - 12, y + 26);
 }
 
 static void sg_section(int top, const char *title)
 {
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    draw_text(sg_win, SG_PAD + 10, top + sc.font_ascent,
-              cfg.col_title_fg_inactive, title);
+    draw_text_bold(sg_win, SG_PAD + 12, top + sc.font_ascent,
+                   cfg.col_panel_fg, title);
 }
 
 /* --------------------------------------------------------------- actions -- */
@@ -318,47 +315,24 @@ static void sg_draw(void)
         return;
     sg_nbtns = 0;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
-    XFillRectangle(sc.dpy, sg_win, sc.gc, 0, 0, SG_W, SG_H);
+    ui_round_fill(sg_win, 0, 0, SG_W, SG_H, 14, cfg.col_panel_bg);
+    ui_round_fill_gradient(sg_win, 0, 0, SG_W, SG_TITLE, 14,
+                           ui_mix(cfg.col_title_bg, 0xffffffUL, 8),
+                           ui_mix(cfg.col_title_bg, 0x000000UL, 6));
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_title_bg, 0xffffffUL, 9));
+    XDrawLine(sc.dpy, sg_win, sc.gc, 12, 0, SG_W - 12, 0);
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_title_bg, 0x000000UL, 34));
+    XDrawLine(sc.dpy, sg_win, sc.gc, 0, SG_TITLE - 1, SG_W, SG_TITLE - 1);
 
-    /* macOS-style title: calm close dot left, shield mark, title after */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
-    XFillRectangle(sc.dpy, sg_win, sc.gc, 0, 0, SG_W, SG_TITLE);
+    ui_draw_traffic(sg_win, 14, SG_TITLE / 2, 1, sg_hover_light, 0,
+                    cfg.col_title_bg);
     {
-        int d = 12, ox = 6, oy = (SG_TITLE - d) / 2;
+        int tw = text_width_bold("Security");
 
-        XSetForeground(sc.dpy, sc.gc, 0xc07a7aUL);
-        XFillArc(sc.dpy, sg_win, sc.gc, ox, oy, (unsigned)d, (unsigned)d, 0,
-                 360 * 64);
-        if (sg_hover_close) {
-            XSetForeground(sc.dpy, sc.gc, 0xedf0f5UL);
-            XDrawArc(sc.dpy, sg_win, sc.gc, ox - 2, oy - 2, (unsigned)(d + 4),
-                     (unsigned)(d + 4), 0, 360 * 64);
-        }
-        XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
-        XDrawLine(sc.dpy, sg_win, sc.gc, ox + 4, oy + 4, ox + 8, oy + 8);
-        XDrawLine(sc.dpy, sg_win, sc.gc, ox + 4, oy + 8, ox + 8, oy + 4);
+        draw_text_bold(sg_win, (SG_W - tw) / 2,
+                       (SG_TITLE + sc.font_ascent - sc.font_descent) / 2,
+                       cfg.col_title_fg, "Security");
     }
-    {
-        XPoint p[5];
-        int sx = 28, cy = SG_TITLE / 2;
-
-        p[0].x = sx;
-        p[0].y = cy - 7;
-        p[1].x = sx + 13;
-        p[1].y = cy - 7;
-        p[2].x = sx + 13;
-        p[2].y = cy;
-        p[3].x = sx + 6;
-        p[3].y = cy + 7;
-        p[4].x = sx;
-        p[4].y = cy;
-        XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-        XFillPolygon(sc.dpy, sg_win, sc.gc, p, 5, Convex, CoordModeOrigin);
-    }
-    draw_text(sg_win, 48, 16, cfg.col_title_fg, "SCDE Security");
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    XFillRectangle(sc.dpy, sg_win, sc.gc, 0, SG_TITLE - 1, SG_W, 1);
 
     mode = scde_security_get_scan_mode();
     watch_on = scde_security_watch_fd() >= 0;
@@ -523,10 +497,8 @@ static void sg_draw(void)
         }
     }
 
-    /* quiet outer hairline */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, sg_win, sc.gc, 0, 0, (unsigned)(SG_W - 1),
-                   (unsigned)(SG_H - 1));
+    ui_round_outline(sg_win, 0, 0, SG_W, SG_H, 14,
+                     ui_mix(cfg.col_panel_bg, 0xffffffUL, 20));
     XFlush(sc.dpy);
 }
 
@@ -542,17 +514,30 @@ void security_gui_show(void)
         wa.event_mask = ExposureMask | ButtonPressMask | PointerMotionMask |
                         KeyPressMask;
         sg_x = (sc.sw - SG_W) / 2;
-        sg_y = (sc.sh - SG_H) / 2 - 40 > 10 ? (sc.sh - SG_H) / 2 - 40 : 10;
+        if (sg_x < 0)
+            sg_x = 0;
+        /* keep the title bar reachable: pinned below the menu bar, and
+           never pushed above it even when the window is taller than the
+           space between the menu bar and the dock (the dock may then
+           cover the window's lower part, like a floating panel) */
+        sg_y = (sc.sh - SG_H) / 2 - 40;
+        if (sg_y < reserve_top())
+            sg_y = reserve_top();
+        if (sg_y + SG_H > sc.sh - reserve_bottom())
+            sg_y = sc.sh - reserve_bottom() - SG_H;
+        if (sg_y < reserve_top())
+            sg_y = reserve_top();
         sg_win = XCreateWindow(sc.dpy, sc.root, sg_x, sg_y,
                                SG_W, SG_H, 0, CopyFromParent, InputOutput,
                                CopyFromParent,
                                CWOverrideRedirect | CWBackPixel | CWEventMask,
                                &wa);
         XStoreName(sc.dpy, sg_win, "SCDE Security");
+        ui_shape_round(sg_win, SG_W, SG_H, 14);
     }
     sg_open = 1;
     sg_hover = -1;
-    sg_hover_close = 0;
+    sg_hover_light = -1;
     XMapRaised(sc.dpy, sg_win);
     focus_track(sg_win);
     taskbar_register(sg_win, TASK_APP_SECURITY, "SCDE Security");
@@ -648,12 +633,17 @@ int security_gui_expose(XExposeEvent *ev)
 int security_gui_motion(XMotionEvent *ev)
 {
     int i, found = -1;
-    int hc = 0;
+    int hc = -1;
 
     if (!sg_open || ev->window != sg_win)
         return 0;
-    if (ev->y < SG_TITLE && ev->x < SG_TITLE)
-        hc = 1;
+    if (ev->y < SG_TITLE) {
+        int cell = 21;
+        int left = 8;
+
+        if (ev->x >= left && ev->x < left + 3 * cell)
+            hc = (ev->x - left) / cell;
+    }
     for (i = 0; i < sg_nbtns; i++) {
         if (ev->x >= sg_btns[i].x && ev->x < sg_btns[i].x + sg_btns[i].w &&
             ev->y >= sg_btns[i].y && ev->y < sg_btns[i].y + sg_btns[i].h) {
@@ -661,9 +651,9 @@ int security_gui_motion(XMotionEvent *ev)
             break;
         }
     }
-    if (found != sg_hover || hc != sg_hover_close) {
+    if (found != sg_hover || hc != sg_hover_light) {
         sg_hover = found;
-        sg_hover_close = hc;
+        sg_hover_light = hc;
         sg_draw();
     }
     return 1;
@@ -689,10 +679,19 @@ int security_gui_button(XButtonEvent *ev)
         return 1;
     focus_track(sg_win);
     if (ev->y < SG_TITLE) {
-        if (ev->x < SG_TITLE)
-            security_gui_close();
-        else                            /* title bar drags the window */
+        int cell = 21;
+        int left = 8;
+
+        if (ev->x >= left && ev->x < left + 3 * cell) {
+            int light = (ev->x - left) / cell;
+
+            if (light == UI_LIGHT_CLOSE)
+                security_gui_close();
+            else if (light == UI_LIGHT_MIN)
+                security_gui_hide();
+        } else {
             selfdrag_window(sg_win, ev, &sg_x, &sg_y, SG_W, SG_H);
+        }
         return 1;
     }
     for (i = 0; i < sg_nbtns; i++) {

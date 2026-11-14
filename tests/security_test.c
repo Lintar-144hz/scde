@@ -348,11 +348,36 @@ static int fn_restrict(void)
 {
     int rc = 0;
     pid_t p;
+    struct rlimit cpu_before;
 
+    if (getrlimit(RLIMIT_CPU, &cpu_before) != 0)
+        return 128;                       /* cannot even probe: odd host */
     if (scde_sandbox_apply(SCDE_SANDBOX_RESTRICT) != SCDE_OK)
         return 1;
     if (nnp_status() != 1)
         rc |= 2;
+#ifdef RLIMIT_AS
+    {
+        struct rlimit rl;
+
+        /* the 3 GiB ceiling must actually be in place on this path */
+        if (getrlimit(RLIMIT_AS, &rl) != 0)
+            rc |= 32;
+        else if (rl.rlim_cur == 0 ||
+                 rl.rlim_cur > (rlim_t)(3072UL * 1024UL * 1024UL))
+            rc |= 32;
+    }
+#endif
+    {
+        struct rlimit rl;
+
+        /* SCDE imposes no CPU quota: the value stays exactly as found */
+        if (getrlimit(RLIMIT_CPU, &rl) != 0)
+            rc |= 64;
+        else if (rl.rlim_cur != cpu_before.rlim_cur ||
+                 rl.rlim_max != cpu_before.rlim_max)
+            rc |= 64;
+    }
     if (socket(AF_INET, SOCK_STREAM, 0) < 0)
         rc |= 4;                        /* net must stay available */
     p = fork();
@@ -404,7 +429,8 @@ static void test_sandbox(void)
     scde_security_features_t f;
 
     scde_security_features(&f);
-    CHECK_INT(child_run(fn_restrict), 0, "RESTRICT tier (nnp, net, fork)");
+    CHECK_INT(child_run(fn_restrict), 0,
+              "RESTRICT tier (nnp, net, fork, 3GiB ceiling, no cpu quota)");
     if (f.sandbox == SCDE_FEATURE_UNAVAILABLE) {
         fprintf(stderr, "note: sandbox UNAVAILABLE, FULL tier skipped\n");
         return;
@@ -601,7 +627,10 @@ static void test_mediated_caps(void)
 static int fn_limits_child(void)
 {
     struct rlimit rl;
+    struct rlimit cpu_before;
 
+    if (getrlimit(RLIMIT_CPU, &cpu_before) != 0)
+        return 12;
     if (scde_resource_apply() != SCDE_OK)
         return 1;
     if (getrlimit(RLIMIT_CORE, &rl) != 0)
@@ -612,15 +641,20 @@ static int fn_limits_child(void)
         return 4;
     if (rl.rlim_cur == 0 || rl.rlim_cur > 4096)
         return 5;
+    /* RAM: the 3 GiB sandbox ceiling must actually be in place */
 #ifdef RLIMIT_AS
     if (getrlimit(RLIMIT_AS, &rl) != 0)
         return 6;
-    if (rl.rlim_cur == 0 || rl.rlim_cur > (rlim_t)(2UL * 1024UL * 1024UL * 1024UL))
+    if (rl.rlim_cur == 0 ||
+        rl.rlim_cur > (rlim_t)(3072UL * 1024UL * 1024UL))
         return 7;
 #endif
+    /* CPU: SCDE must not impose its own quota - the value is left
+       exactly as the host had it (never lowered by us) */
     if (getrlimit(RLIMIT_CPU, &rl) != 0)
         return 8;
-    if (rl.rlim_cur == 0 || rl.rlim_cur > 3600)
+    if (rl.rlim_cur != cpu_before.rlim_cur ||
+        rl.rlim_max != cpu_before.rlim_max)
         return 9;
     if (getrlimit(RLIMIT_FSIZE, &rl) != 0)
         return 10;
@@ -637,8 +671,9 @@ static void test_resources(void)
     pid_t me;
 
     scde_resource_defaults(&lim);
-    CHECK(lim.ram_bytes > 0, "default ram set");
-    CHECK(lim.cpu_seconds > 0, "default cpu set");
+    CHECK(lim.ram_bytes == 3072ul * 1024ul * 1024ul,
+          "default ram is the 3 GiB sandbox ceiling");
+    CHECK_INT(lim.cpu_seconds, 0, "default: no SCDE CPU quota");
     CHECK(lim.nproc > 0, "default nproc set");
     CHECK(lim.nofile > 0, "default nofile set");
     CHECK(lim.fsize_bytes > 0, "default fsize set");
@@ -646,6 +681,8 @@ static void test_resources(void)
     CHECK_INT(scde_resource_describe(desc, sizeof(desc)), SCDE_OK,
               "resource describe");
     CHECK(desc[0] != '\0', "describe non-empty");
+    CHECK(strstr(desc, "3072") != NULL, "describe shows the 3 GiB ceiling");
+    CHECK(strstr(desc, "cpu=none") != NULL, "describe shows no CPU quota");
 
     /* custom limits round-trip */
     lim.nofile = 64;

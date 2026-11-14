@@ -74,133 +74,94 @@ void frame_sync(Client *c)
                       (unsigned)frame_h(c));
     XMoveResizeWindow(sc.dpy, c->win, 0, c->title_h, (unsigned)c->w,
                       (unsigned)c->h);
+    ui_shape_round(c->frame, c->w, frame_h(c), 11);
 }
 
 /* ---------------------------------------------------------- title bar art */
 
-/* width of one title-bar button: Harbor style (46 px), shrinking on very
-   narrow windows instead of dropping the buttons all (0 = no room) */
-static int title_btn_w(int W)
-{
-    int bw = (W - 16) / 3;
+#define TRAFFIC_D 13
+#define TRAFFIC_GAP 8
+#define TRAFFIC_LEFT 14
 
-    if (bw > 46)
-        bw = 46;
-    return bw < 14 ? 0 : bw;
-}
-
-/* muted traffic-light tones: SCDE clay / amber / sage, never neon.
-   Cell order is macOS-like: close, minimise, maximise (left to right). */
-static unsigned long title_btn_color(int i)
+static int traffic_span(void)
 {
-    switch (i) {
-    case BTN_CLOSE: return 0xc07a7aUL;
-    case BTN_MIN:   return 0xc9a86aUL;
-    default:        return 0x7fb08aUL;
-    }
-}
-
-/* blend a colour toward another by 50% (dim the dots on inactive titles) */
-static unsigned long blend50(unsigned long a, unsigned long b)
-{
-    return (((a & 0xfefefeUL) >> 1) + ((b & 0xfefefeUL) >> 1));
+    return 3 * TRAFFIC_D + 2 * TRAFFIC_GAP;
 }
 
 void frame_paint(Client *c)
 {
-    int W, th, i, bw;
-    unsigned long bg, fg;
+    int W, th, bl;
+    unsigned long bg, top, bottom, fg;
+    int hover = -1;
 
     if (c->frame == None || c->fullscreen || c->minimized)
         return;
 
     W = c->w;
     th = c->title_h;
-    bg = sc.focused == c ? cfg.col_title_bg : cfg.col_title_bg_inactive;
-    fg = sc.focused == c ? cfg.col_title_fg : cfg.col_title_fg_inactive;
-    bw = title_btn_w(W);
-
-    XSetForeground(sc.dpy, sc.gc, bg);
-    XFillRectangle(sc.dpy, c->frame, sc.gc, 0, 0, (unsigned)W, (unsigned)th);
-    /* Harbor top highlight: one quiet lighter line for depth, no gradient */
-    XSetForeground(sc.dpy, sc.gc, sc.focused == c ? cfg.col_btn_hover
-                                                  : cfg.col_border_unfocus);
-    XFillRectangle(sc.dpy, c->frame, sc.gc, 0, 0, (unsigned)W, 1);
-
-    /* window buttons (left side): calm circular chips, close/min/max */
-    for (i = BTN_CLOSE; i >= BTN_MIN && bw > 0; i--) {
-        int cell = i == BTN_CLOSE ? 0 : i == BTN_MIN ? 1 : 2;
-        int bx = cell * bw;
-        int d = th < bw ? th - 6 : bw - 6;
-        int ox, oy, cx, cy;
-        unsigned long col;
-
-        if (d < 8)
-            d = 8;
-        if (d > 18)
-            d = 18;
-        ox = bx + (bw - d) / 2;
-        oy = (th - d) / 2;
-        cx = ox + d / 2;
-        cy = oy + d / 2;
-        col = title_btn_color(i);
-        if (sc.focused != c)
-            col = blend50(col, bg);
-        XSetForeground(sc.dpy, sc.gc, col);
-        XFillArc(sc.dpy, c->frame, sc.gc, ox, oy, (unsigned)d, (unsigned)d,
-                 0, 360 * 64);
-        if (c->hover_btn == i) {
-            XSetForeground(sc.dpy, sc.gc, 0xedf0f5UL);
-            XDrawArc(sc.dpy, c->frame, sc.gc, ox - 2, oy - 2,
-                     (unsigned)(d + 4), (unsigned)(d + 4), 0, 360 * 64);
-        }
-        /* glyph in the title-bar tone so the dot keeps its colour */
-        XSetForeground(sc.dpy, sc.gc, bg);
-        if (i == BTN_MIN) {
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 4, cy, cx + 4, cy);
-        } else if (i == BTN_MAX) {
-            if (c->maximized) {
-                /* restore: two overlapping squares */
-                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 4, cy - 5, 7, 7);
-                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 2, cy - 3, 7, 7);
-            } else {
-                XDrawRectangle(sc.dpy, c->frame, sc.gc, cx - 4, cy - 4, 8, 8);
-            }
-        } else {
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 3, cy - 3, cx + 3, cy + 3);
-            XDrawLine(sc.dpy, c->frame, sc.gc, cx - 3, cy + 3, cx + 3, cy - 3);
-        }
+    if (sc.focused == c) {
+        bg = cfg.col_title_bg;
+        top = ui_mix(bg, 0xffffffUL, 8);
+        bottom = ui_mix(bg, 0x000000UL, 7);
+        fg = cfg.col_title_fg;
+    } else {
+        bg = cfg.col_title_bg_inactive;
+        top = ui_mix(bg, 0xffffffUL, 3);
+        bottom = ui_mix(bg, 0x000000UL, 5);
+        fg = cfg.col_title_fg_inactive;
     }
 
-    /* title text (macOS style: centred between the buttons and the edge) */
+    ui_round_fill_gradient(c->frame, 0, 0, W, th, 0, top, bottom);
+    XSetForeground(sc.dpy, sc.gc, ui_mix(top, 0xffffffUL, 8));
+    XDrawLine(sc.dpy, c->frame, sc.gc, 0, 0, W, 0);
+    XSetForeground(sc.dpy, sc.gc, ui_mix(bottom, 0x000000UL, 38));
+    XDrawLine(sc.dpy, c->frame, sc.gc, 0, th - 1, W, th - 1);
+
+    if (c->hover_btn == BTN_CLOSE)
+        hover = UI_LIGHT_CLOSE;
+    else if (c->hover_btn == BTN_MIN)
+        hover = UI_LIGHT_MIN;
+    else if (c->hover_btn == BTN_MAX)
+        hover = UI_LIGHT_MAX;
+
+    if (W > traffic_span() + 80) {
+        ui_draw_traffic(c->frame, TRAFFIC_LEFT, th / 2,
+                        sc.focused == c, hover, c->maximized, bg);
+    }
+
+    bl = (th + sc.font_ascent - sc.font_descent) / 2;
     {
-        int left = (bw > 0 ? bw * 3 + 8 : 8);
-        int avail = W - left - 8;
-        int baseline = (th + sc.font_ascent - sc.font_descent) / 2;
+        int right = W - 14;
+        int left = traffic_span() + 30;
+        int tw;
         char shown[NAME_MAX_LEN];
 
-        if (avail > 40) {
-            fit_text(shown, sizeof(shown), c->name, avail);
-            draw_text(c->frame, left + (avail - text_width(shown)) / 2,
-                      baseline, fg, shown);
+        if (W > traffic_span() + 120) {
+            tw = text_width_bold(c->name);
+            if (tw <= right - left) {
+                draw_text_bold(c->frame, (W - tw) / 2, bl, fg, c->name);
+            } else {
+                str_copy(shown, sizeof(shown), c->name);
+                draw_text_clip_font(c->frame, sc.font_bold, left, right, bl,
+                                    fg, shown);
+            }
+        } else if (right - left > 24) {
+            draw_text_clip_font(c->frame, sc.font_bold, left, right, bl, fg,
+                                c->name);
         }
     }
-
-    /* separator between title bar and content */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawLine(sc.dpy, c->frame, sc.gc, 0, th, W, th);
 }
 
 int frame_button_at(Client *c, int x, int y)
 {
-    int bw = title_btn_w(c->w);
+    int cell = TRAFFIC_D + TRAFFIC_GAP;
+    int left = TRAFFIC_LEFT - 6;
 
-    if (y < 0 || y >= c->title_h || bw == 0)
+    if (y < 0 || y >= c->title_h)
         return BTN_NONE;
-    if (x < 0 || x >= bw * 3)
+    if (x < left || x >= left + 3 * cell)
         return BTN_NONE;
-    /* cells run close, minimise, maximise from the left */
-    switch (x / bw) {
+    switch ((x - left) / cell) {
     case 0:  return BTN_CLOSE;
     case 1:  return BTN_MIN;
     default: return BTN_MAX;
@@ -261,7 +222,7 @@ void focus_client(Client *c)
 
     if (sc.focused == c) {
         if (c->frame != None)
-            XSetWindowBorder(sc.dpy, c->frame, cfg.col_border_focus);
+            XSetWindowBorder(sc.dpy, c->frame, cfg.col_title_hover);
         frame_paint(c);
         return;
     }
@@ -274,7 +235,7 @@ void focus_client(Client *c)
 
     sc.focused = c;
     if (c->frame != None)
-        XSetWindowBorder(sc.dpy, c->frame, cfg.col_border_focus);
+        XSetWindowBorder(sc.dpy, c->frame, cfg.col_title_hover);
     frame_paint(c);
     focus_track(c->win);
     if (c->frame != None) {
@@ -290,22 +251,22 @@ void focus_client(Client *c)
 
 static void clamp_to_desktop(Client *c)
 {
-    int ph = panel_reserved();
+    int top = reserve_top();
+    int bot = reserve_bottom();
     int fh = frame_h(c);
 
     if (c->fullscreen)
         return;
 
-    if (cfg.panel_top) {
-        if (c->y < ph)
-            c->y = ph;
-    } else if (c->y + fh > sc.sh - ph) {
-        c->y = sc.sh - ph - fh;
-    }
-    if (c->y < 0)
-        c->y = 0;
-    if (c->y > sc.sh - 32)
-        c->y = sc.sh - 32;
+    /* keep clear of the top menu bar and the floating dock */
+    if (c->y < top)
+        c->y = top;
+    if (c->y + fh > sc.sh - bot)
+        c->y = sc.sh - bot - fh;
+    if (c->y < top)
+        c->y = top;
+    if (c->y > sc.sh - bot - 32)
+        c->y = sc.sh - bot - 32;
     if (c->x + c->w < 64)
         c->x = 64 - c->w;
     if (c->x > sc.sw - 64)
@@ -314,7 +275,7 @@ static void clamp_to_desktop(Client *c)
 
 void client_maximize(Client *c, int on)
 {
-    int ph, wy, wh;
+    int wy, wh;
 
     if (!c || c->fullscreen)
         return;
@@ -326,9 +287,8 @@ void client_maximize(Client *c, int on)
         c->sy = c->y;
         c->sw = c->w;
         c->sh = c->h;
-        ph = panel_reserved();
-        wy = cfg.panel_top ? ph : 0;
-        wh = sc.sh - ph;
+        wy = reserve_top();
+        wh = sc.sh - reserve_top() - reserve_bottom();
         c->x = 0;
         c->y = wy;
         c->w = sc.sw - 2 * c->bw;
@@ -429,9 +389,8 @@ void show_desktop_toggle(void)
 
 void snap_client(Client *c, int side)
 {
-    int ph = panel_reserved();
-    int wy = cfg.panel_top ? ph : 0;
-    int wh = sc.sh - ph;
+    int wy = reserve_top();
+    int wh = sc.sh - reserve_top() - reserve_bottom();
 
     if (!c || c->fullscreen)
         return;
@@ -515,6 +474,57 @@ void cycle_windows(int dir)
     focus_client(picked);
 }
 
+/*
+ * The X server's real input focus - one round trip, only when an action
+ * targets "the active window" (Alt+F4, Alt+Down, the menu bar).
+ */
+static Window current_focus(void)
+{
+    Window f = None;
+    int revert = RevertToNone;
+
+    if (sc.dpy)
+        XGetInputFocus(sc.dpy, &f, &revert);
+    return f;
+}
+
+/* close the focused window, internal applications included */
+void active_close(void)
+{
+    Window fw = current_focus();
+
+    if (fm_open() && (fw == fm_window() || sc.focus_win == fm_window())) {
+        fm_close();
+        return;
+    }
+    if (security_gui_open() &&
+        (fw == security_gui_window() ||
+         sc.focus_win == security_gui_window())) {
+        security_gui_close();
+        return;
+    }
+    close_client(sc.focused);
+}
+
+/* minimise the focused window (or restore it), internal apps included */
+void active_minimize(void)
+{
+    Window fw = current_focus();
+
+    if (fm_open() && (fw == fm_window() || sc.focus_win == fm_window())) {
+        fm_hide();
+        return;
+    }
+    if (security_gui_open() &&
+        (fw == security_gui_window() ||
+         sc.focus_win == security_gui_window())) {
+        security_gui_hide();
+        return;
+    }
+    if (sc.focused)
+        client_minimize(sc.focused, sc.focused->minimized ? 0 : 1);
+}
+
 /* ----------------------------------------------------------------- manage */
 
 static int window_is_fullscreen(Window w)
@@ -575,8 +585,8 @@ void manage(Window w)
     Client *c, *tail;
     int fx, fy;
 
-    if (w == None || w == sc.panel || w == sc.menu || w == sc.cmd ||
-        w == sc.wm_check)
+    if (w == None || w == sc.panel || w == sc.dock || w == sc.menu ||
+        w == sc.cmd || w == sc.wm_check)
         return;
     if (client_find(w))
         return;
@@ -700,7 +710,8 @@ void handle_configure_request(XConfigureRequestEvent *ev)
     Client *c = client_find(ev->window);
     XWindowChanges wc;
     unsigned int mask = (unsigned int)ev->value_mask;
-    int ph = panel_reserved();
+    int top = reserve_top();
+    int bottom = reserve_bottom();
 
     if (!c) {
         /* window is not ours (or has not been managed yet) */
@@ -742,11 +753,11 @@ void handle_configure_request(XConfigureRequestEvent *ev)
     }
     if (mask & CWY) {
         int ny = wc.y - c->bw - c->title_h;
-        int top = cfg.panel_top ? ph : 0;
+
         if (ny < top)
             ny = top;
-        if (ny > sc.sh - 32)
-            ny = sc.sh - 32;
+        if (ny > sc.sh - bottom - 32)
+            ny = sc.sh - bottom - 32;
         c->y = ny;
     }
 
@@ -880,6 +891,8 @@ void handle_expose(XExposeEvent *ev)
         frame_paint(c);
     else if (ev->window == sc.panel)
         panel_expose(ev);
+    else if (ev->window == sc.dock)
+        dock_expose(ev);
     else if (ev->window == sc.menu)
         menu_expose(ev);
     else if (ev->window == sc.cmd)
@@ -977,8 +990,9 @@ void manage_existing(void)
                 manage(children[i]);
             continue;
         }
-        if (children[i] == sc.panel || children[i] == sc.menu ||
-            children[i] == sc.cmd || children[i] == sc.wm_check)
+        if (children[i] == sc.panel || children[i] == sc.dock ||
+            children[i] == sc.menu || children[i] == sc.cmd ||
+            children[i] == sc.wm_check)
             continue;
 
         /* stale frame left behind by a crashed instance: adopt its clients */

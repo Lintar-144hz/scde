@@ -35,6 +35,14 @@ geom_w() { xwininfo -id "$1" 2>/dev/null | sed -n 's/^ *Width:  *\([0-9]*\)/\1/p
 geom_h() { xwininfo -id "$1" 2>/dev/null | sed -n 's/^ *Height:  *\([0-9]*\)/\1/p'; }
 active() { xdotool getactivewindow 2>/dev/null || echo 0; }
 hexid() { printf '0x%x' "$1"; }
+dock_win() { xdotool search --onlyvisible --name '^scde-dock$' 2>/dev/null | head -1; }
+dock_icon() { # dock_icon <task-index> -> "X Y" centre of the dock tile
+    local D X Y
+    D=$(dock_win)
+    X=$(geom_x "$D"); Y=$(geom_y "$D")
+    # launcher tile 8..48, separator 11, tiles at 59+48i, centre +20/+26
+    echo $(( X + 59 + 48*$1 + 20 )) $(( Y + 26 ))
+}
 
 cleanup() {
     export HOME="$HOME_SAVE"
@@ -69,7 +77,6 @@ printf '%s\n' "$@" > "$HOME/browser_args"
 FB
 chmod +x "$WORK/fakebrowser"
 cat > "$HOME/.config/scde/config" <<EOF
-panel=bottom
 panel_height=28
 border_width=3
 border_focused=#ff6600
@@ -82,6 +89,7 @@ show_clock=1
 clock_format=%H:%M:%S
 terminal=touch $WORK/term_marker
 browser=$WORK/fakebrowser
+sandbox_memory_mb=2048
 menu=MarkerOne|touch $MARKER1
 menu=MarkerTwo|touch $MARKER3
 menu=Terminal|true
@@ -100,7 +108,7 @@ fi
 log "== Xvfb ready on $DPY (${W}x${H}) =="
 
 # ------------------------------------------------------------- 1. start up
-log "[1] startup / singleton / panel"
+log "[1] startup / singleton / menu bar + dock"
 "$BIN" >"$WORK/scde.log" 2>&1 &
 SCDE_PID=$!
 sleep 0.6
@@ -109,15 +117,24 @@ if kill -0 "$SCDE_PID" 2>/dev/null; then ok "scde starts"; else bad "scde starts
 if "$BIN" >"$WORK/scde2.log" 2>&1; then bad "second instance refused"; else ok "second instance refused"; fi
 grep -qi "already" "$WORK/scde2.log" && ok "singleton message printed" || bad "singleton message printed"
 
-if xwininfo -root -children 2>/dev/null | grep -q "scde-panel"; then
-    ok "panel window created"
+if xwininfo -root -children 2>/dev/null | grep -q "scde-menubar"; then
+    ok "menu bar window created"
 else
-    bad "panel window created"
+    bad "menu bar window created"
 fi
-check "panel sits on the bottom edge" \
-    sh -c "xwininfo -root -children | grep scde-panel | grep -q '+0+$((H - 28))'"
+check "menu bar sits on the top edge" \
+    sh -c "xwininfo -root -children | grep scde-menubar | grep -q '+0+0'"
+check "menu bar is a slim 28 px strip" \
+    sh -c "xwininfo -root -children | grep scde-menubar | grep -qE '1024x28\+0\+0'"
+if xdotool search --onlyvisible --name '^scde-dock$' >/dev/null 2>&1; then
+    ok "dock window created"
+else
+    bad "dock window created"
+fi
+check "dock floats above the bottom edge (empty: 56 px wide, centred)" \
+    sh -c "xwininfo -root -children | grep scde-dock | grep -qE '56x60\+[0-9]+\+$((H - 68))'"
 
-BG=$("$PIXELBIN" 2>/dev/null | tr -d '\n')
+BG=$("$PIXELBIN" 10 40 2>/dev/null | tr -d '\n')
 if [ "$BG" = "0x101014" ]; then ok "dark desktop background ($BG)"; else bad "dark desktop background ($BG, want 0x101014)"; fi
 
 # ------------------------------------------------------ 2. window management
@@ -169,16 +186,16 @@ sleep 0.3
 
 xdotool mousemove 400 $((H - 14))
 sleep 0.3
-[ "$(active)" = "$WB" ] && ok "panel does not steal focus" || bad "panel does not steal focus (got $(active))"
+[ "$(active)" = "$WB" ] && ok "dock does not steal focus" || bad "dock does not steal focus (got $(active))"
 
-# the panel lists clients in mapping order: first button = first list entry
+# the dock lists clients in mapping order: first icon = first list entry
 LIST=$(xprop -root _NET_CLIENT_LIST 2>/dev/null | sed 's/.*# //; s/,//g')
 BTN1=$(( $(echo "$LIST" | awk '{print $1}') ))
 BTN2=$(( $(echo "$LIST" | awk '{print $2}') ))
-xdotool mousemove 100 $((H - 14)); xdotool click 1; sleep 0.35
-[ "$(active)" = "$BTN1" ] && ok "panel window list first button focuses its window" || bad "panel window list first button focuses its window (got $(active), want $BTN1)"
-xdotool mousemove 250 $((H - 14)); xdotool click 1; sleep 0.35
-[ "$(active)" = "$BTN2" ] && ok "panel window list second button focuses its window" || bad "panel window list second button focuses its window (got $(active), want $BTN2)"
+D0=($(dock_icon 0)); xdotool mousemove "${D0[0]}" "${D0[1]}"; xdotool click 1; sleep 0.35
+[ "$(active)" = "$BTN1" ] && ok "dock first icon focuses its window" || bad "dock first icon focuses its window (got $(active), want $BTN1)"
+D1=($(dock_icon 1)); xdotool mousemove "${D1[0]}" "${D1[1]}"; xdotool click 1; sleep 0.35
+[ "$(active)" = "$BTN2" ] && ok "dock second icon focuses its window" || bad "dock second icon focuses its window (got $(active), want $BTN2)"
 
 # ------------------------------------------------------------- 4. alt+tab
 log "[4] Alt+Tab"
@@ -427,18 +444,19 @@ CLIST=$(xprop -root _NET_CLIENT_LIST 2>/dev/null)
 case "$CLIST" in *"$WB_HEX"*) bad "vanished client removed from list" ;; *) ok "vanished client removed from list" ;; esac
 
 # ------------------------------------------- 14. config reload / restart
-log "[14] config reload (panel=top) + existing windows"
+log "[14] config reload (menu bar taller) + existing windows"
 kill -TERM "$SCDE_PID" 2>/dev/null
 for i in $(seq 1 50); do kill -0 "$SCDE_PID" 2>/dev/null || break; sleep 0.1; done
 wait "$SCDE_PID" 2>/dev/null
 SCDE_PID=""
-sed -i 's/panel=bottom/panel=top/' "$HOME/.config/scde/config"
+sed -i 's/panel_height=28/panel_height=34/' "$HOME/.config/scde/config"
 "$BIN" >"$WORK/scde4.log" 2>&1 &
 SCDE_PID=$!
 sleep 0.8
 if kill -0 "$SCDE_PID" 2>/dev/null; then ok "restarts with new config"; else bad "restarts with new config"; cat "$WORK/scde4.log"; fi
-check "panel sits on the top edge" \
-    sh -c "xwininfo -root -children | grep scde-panel | grep -q '+0+0'"
+MB=$(xdotool search --onlyvisible --name '^scde-menubar$' 2>/dev/null | head -1)
+check "menu bar height follows the new config" \
+    sh -c "[ -n '${MB:-}' ] && xwininfo -id $MB | grep -qE 'Height: +34'"
 CLIST=$(xprop -root _NET_CLIENT_LIST 2>/dev/null)
 case "$CLIST" in *"$WC_HEX"*) ok "existing window re-managed after restart" ;; *) bad "existing window re-managed after restart ($CLIST)" ;; esac
 xdotool mousemove 140 115; sleep 0.35
@@ -476,19 +494,18 @@ else
     bad "Alt+Right snaps to the right half (w=$SWR x=$SXR)"
 fi
 
-# minimize via Alt+Down, restore from the panel task button
+# minimize via Alt+Down, restore from the dock icon
 xdotool key alt+Down; sleep 0.4
 if xwininfo -id "$XC" | grep -qE 'Map State: Is(Unmapped|unviewable|Unviewable)'; then
     ok "Alt+Down minimizes"
 else
     bad "Alt+Down minimizes ($(xwininfo -id "$XC" 2>/dev/null | sed -n 's/.*Map State: //p'))"
 fi
-PANY=$([ "$(grep -c 'panel=top' "$HOME/.config/scde/config")" -gt 0 ] && echo 14 || echo $((H - 14)))
-xdotool mousemove 100 "$PANY"; xdotool click 1; sleep 0.4
+D0=($(dock_icon 0)); xdotool mousemove "${D0[0]}" "${D0[1]}"; xdotool click 1; sleep 0.4
 if xwininfo -id "$XC" | grep -q 'Map State: IsViewable'; then
-    ok "panel task button restores the window"
+    ok "dock icon restores the window"
 else
-    bad "panel task button restores the window"
+    bad "dock icon restores the window"
 fi
 [ "$(active)" = "$XC" ] && ok "restored window is focused" || bad "restored window is focused (got $(active))"
 
@@ -687,8 +704,8 @@ else
     bad "dragging a shortcut saves its position (${LX:-?} ${LY:-?})"
 fi
 
-# --------------------------------------- 18. taskbar integration (internal)
-log "[18] taskbar: File Manager + SCDE Security entries"
+# --------------------------------------- 18. dock integration (internal)
+log "[18] dock: File Manager + SCDE Security entries"
 
 # The taskbar registry publishes its entries on the root window so the
 # window list can be verified exactly instead of pixel guessing.  Only real
@@ -696,12 +713,8 @@ log "[18] taskbar: File Manager + SCDE Security entries"
 tasklist()  { xprop -root _SCDE_TASK_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F]*' | tr '\n' ' '; }
 tasknames() { local w; for w in $(tasklist); do xdotool getwindowname $((w)) 2>/dev/null; done; }
 taskcount() { tasknames | grep -c -- "$1"; }
-# panel button row: top panel -> middle of a 28px bar is y=14
-TPANY=$([ "$(grep -c 'panel=top' "$HOME/.config/scde/config")" -gt 0 ] && echo 14 || echo $((H - 14)))
-# task buttons start right of the launcher (x=50) and are 176px wide on this
-# screen, so the first two entries sit around x=100 and x=250
-TX1=100
-TX2=250
+# dock icons are computed from the live dock geometry (helper above);
+# the first two taskbar entries sit under dock icons 0 and 1
 
 # start from a clean desktop: managed windows are covered by tests [3] and
 # [15]; this block exercises the internal application windows, and their
@@ -771,19 +784,19 @@ else
     bad "hidden File Manager keeps its taskbar entry"
 fi
 
-# 5. clicking the entry restores and focuses the window
-xdotool mousemove "$TX1" "$TPANY"; sleep 0.25
+# 5. clicking the icon restores and focuses the window
+D0=($(dock_icon 0)); xdotool mousemove "${D0[0]}" "${D0[1]}"; sleep 0.25
 xdotool click 1; sleep 0.6
 if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
-    ok "taskbar click restores the File Manager"
+    ok "dock click restores the File Manager"
 else
-    bad "taskbar click restores the File Manager"
+    bad "dock click restores the File Manager"
 fi
 FM=$(xdotool search --onlyvisible --name '^scde-fm' 2>/dev/null | head -1)
 if [ "$(xdotool getwindowfocus 2>/dev/null)" = "$FM" ]; then
-    ok "taskbar click focuses the File Manager"
+    ok "dock click focuses the File Manager"
 else
-    bad "taskbar click focuses the File Manager (got $(xdotool getwindowfocus 2>/dev/null), want $FM)"
+    bad "dock click focuses the File Manager (got $(xdotool getwindowfocus 2>/dev/null), want $FM)"
 fi
 
 # 6. closing the File Manager drops only its entry
@@ -839,14 +852,14 @@ else
     bad "exactly two entries after reopening both ($(tasklist | wc -w))"
 fi
 
-# 9. the second entry belongs to the security center
-xdotool mousemove "$TX2" "$TPANY"; sleep 0.25
+# 9. the second icon belongs to the security center
+D1=($(dock_icon 1)); xdotool mousemove "${D1[0]}" "${D1[1]}"; sleep 0.25
 xdotool click 1; sleep 0.6
 SG=$(xdotool search --onlyvisible --name '^SCDE Security' 2>/dev/null | head -1)
 if [ "$(xdotool getwindowfocus 2>/dev/null)" = "$SG" ]; then
-    ok "taskbar click focuses the SCDE Security window"
+    ok "dock click focuses the SCDE Security window"
 else
-    bad "taskbar click focuses the SCDE Security window (got $(xdotool getwindowfocus 2>/dev/null), want ${SG:-?})"
+    bad "dock click focuses the SCDE Security window (got $(xdotool getwindowfocus 2>/dev/null), want ${SG:-?})"
 fi
 
 # 10. show desktop hides both, both entries stay, restore brings them back
@@ -922,9 +935,9 @@ else
     bad "clearing the filter keeps the FM open"
 fi
 
-# double click on the first visible row ("..") with the sidebar present:
+# double click on the first visible row ("..", below the column header):
 # exercises the offset list click mapping, ascends to the parent
-xdotool mousemove $((FXX + 400)) $((FYY + 74)); sleep 0.25
+xdotool mousemove $((FXX + 400)) $((FYY + 98)); sleep 0.25
 xdotool click --repeat 2 --delay 150 1; sleep 0.7
 FMNAME=$(xdotool getwindowname "$FM" 2>/dev/null)
 if [ "$FMNAME" = "scde-fm: $WORK" ]; then
@@ -983,10 +996,15 @@ fi
 
 # design tokens stay in the source (guards against accidental reverts)
 check "Harbor accent in the palette" grep -q "#7c9cbf" "$ROOT/src/config.c"
-check "FM places sidebar in the source" grep -q "place_names" "$ROOT/src/fm.c"
+check "menu bar in the source" grep -q "scde-menubar" "$ROOT/src/panel.c"
+check "floating dock in the source" grep -q "scde-dock" "$ROOT/src/dock.c"
+check "FM favorites sidebar in the source" grep -q "fav_names" "$ROOT/src/fm.c"
+check "FM forward history in the source" grep -q "n_fwd" "$ROOT/src/fm.c"
 check "FM search filter in the source" grep -q "sbuf" "$ROOT/src/fm.c"
 check "Security cards in the source" grep -q "sg_card" "$ROOT/src/security_gui.c"
 check "wallpaper motif in the source" grep -q "Harbor signature" "$ROOT/src/main.c"
+check "3 GiB ceiling in the sandbox" grep -q "3072" "$ROOT/src/security/sandbox.c"
+check "no SCDE CPU quota in resource defaults" grep -q "cpu_seconds = 0" "$ROOT/src/security/resource.c"
 
 # gradient wallpaper: restart with distinct stops, sample two flat points
 kill -TERM "$SCDE_PID" 2>/dev/null
@@ -1015,6 +1033,70 @@ if [ "$TOP" != "$BOT" ]; then
     ok "wallpaper is a real gradient, not flat"
 else
     bad "wallpaper is a real gradient, not flat"
+fi
+
+# --------------------------------------- 20. menu bar menus + dock + limits
+log "[20] menu bar launcher, dock right-click, sandbox memory config"
+
+# menu bar launcher mark opens the application menu
+MB=$(xdotool search --onlyvisible --name '^scde-menubar$' 2>/dev/null | head -1)
+if [ -n "${MB:-}" ]; then ok "menu bar present for menu test"; else bad "menu bar present for menu test"; fi
+MBH=$(geom_h "$MB")
+xdotool mousemove 21 $((MBH / 2)); sleep 0.25
+xdotool click 1; sleep 0.5
+if xdotool search --onlyvisible --name '^scde-menu$' >/dev/null 2>&1; then
+    ok "menu bar mark opens the application menu"
+else
+    bad "menu bar mark opens the application menu"
+fi
+xdotool key Escape; sleep 0.4
+if xdotool search --onlyvisible --name '^scde-menu$' >/dev/null 2>&1; then
+    bad "Escape closes the application menu"
+else
+    ok "Escape closes the application menu"
+fi
+
+# dock grows with entries, right-click minimises, left-click restores
+DW0=$(geom_w "$(dock_win)")
+xdotool key alt+e; sleep 0.7
+DW1=$(geom_w "$(dock_win)")
+if [ -n "${DW1:-}" ] && [ -n "${DW0:-}" ] && [ "$DW1" -gt "$DW0" ]; then
+    ok "dock grows with a new entry ($DW0 -> $DW1)"
+else
+    bad "dock grows with a new entry (${DW0:-?} -> ${DW1:-?})"
+fi
+D0=($(dock_icon 0)); xdotool mousemove "${D0[0]}" "${D0[1]}"; sleep 0.25
+xdotool click 3; sleep 0.6
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    bad "dock right click minimises the File Manager"
+else
+    ok "dock right click minimises the File Manager"
+fi
+if [ "$(taskcount 'scde-fm')" = "1" ]; then
+    ok "minimised entry stays in the dock registry"
+else
+    bad "minimised entry stays in the dock registry"
+fi
+xdotool mousemove "${D0[0]}" "${D0[1]}"; sleep 0.25
+xdotool click 1; sleep 0.6
+if xdotool search --onlyvisible --name '^scde-fm' >/dev/null 2>&1; then
+    ok "dock left click restores the File Manager"
+else
+    bad "dock left click restores the File Manager"
+fi
+xdotool key Escape; sleep 0.5
+DW2=$(geom_w "$(dock_win)")
+if [ "${DW2:-}" = "${DW0:-}" ]; then
+    ok "dock shrinks back after close ($DW1 -> $DW2)"
+else
+    bad "dock shrinks back after close ($DW1 -> ${DW2:-?}, want ${DW0:-?})"
+fi
+
+# sandbox_memory_mb is a real config key (parser accepts it, no warning)
+if grep -q "unknown key 'sandbox_memory_mb'" "$WORK/scde.log"; then
+    bad "sandbox_memory_mb accepted by the config parser"
+else
+    ok "sandbox_memory_mb accepted by the config parser"
 fi
 
 # ------------------------------------------------------------- summary

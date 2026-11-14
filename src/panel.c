@@ -1,6 +1,3 @@
-/*
- * SCDE - panel (Harbor style): launcher mark, task manager, tray, clock
- */
 #include "scde.h"
 
 #include <scde/security.h>
@@ -9,66 +6,58 @@
 #include <string.h>
 #include <time.h>
 
-#define LAUNCHER_W 44
-#define TRAY_ICON_W 24
-#define DESKTOP_W 8
-#define BTN_MAX_W 176
-#define BTN_MIN_W 44
-#define BTN_CLOSE_W 16
+#define BAR_MARK_W   34
+#define BAR_ITEM_PAD 10
+#define TRAY_ICON_W  25
+#define BAR_MIN_H    20
+#define BAR_MAX_H    40
+
+#define MB_LOGO    0
+#define MB_APP     1
+#define MB_FILE    2
+#define MB_WINDOW  3
+#define MB_HELP    4
+#define MB_COUNT   5
 
 typedef struct {
-    int task;                 /* index into the taskbar registry */
     int x, w;
-} PanelBtn;
+} BarItem;
 
-static PanelBtn btns[MAX_PANEL_BTNS];
-static int nbtns;
-static char clock_str[128];
-static char date_str[128];
-static int hover_launcher;
-static int hover_desktop;
-static int hover_task = -1;
-static int hover_task_close;
+static BarItem items[MB_COUNT];
+static int hover_item = -1;
 static int hover_tray = -1;
+static int open_kind = -1;
+static char clock_str[128];
+static char cur_app[NAME_MAX_LEN];
 static int clock_has_seconds;
-static int clock_w, tray_w, desk_w;
+static int clock_w, tray_w;
 static int tray_draw, clock_draw;
+static int bar_h;
 
-/* 50% blend of two RRGGBB colours - used to dim the label of a minimized
-   window so it reads as "not there" */
-static unsigned long dim_color(unsigned long fg, unsigned long bg)
+int menubar_h(void)
 {
-    return (((fg & 0xfefefeUL) >> 1) + ((bg & 0xfefefeUL) >> 1));
+    int h = cfg.panel_height;
+
+    if (h < BAR_MIN_H)
+        h = BAR_MIN_H;
+    if (h > BAR_MAX_H)
+        h = BAR_MAX_H;
+    return h;
 }
 
-/* rounded chip: a plain rect with the corners cut back to the panel bg -
-   the cheapest dock feel without a compositor (paint happens on the panel,
-   so the untouched corners simply keep the panel colour) */
-static void chip(Window w, int x, int y, int wd, int hg, int cut,
-                 unsigned long fg)
+int reserve_top(void)
 {
-    if (wd <= 2 * cut || hg <= 2 * cut || cut < 1)
-        return;
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XFillRectangle(sc.dpy, w, sc.gc, x + cut, y, (unsigned)(wd - 2 * cut),
-                   (unsigned)hg);
-    XFillRectangle(sc.dpy, w, sc.gc, x, y + cut, (unsigned)wd,
-                   (unsigned)(hg - 2 * cut));
+    return menubar_h();
+}
+
+int reserve_bottom(void)
+{
+    return dock_reserved();
 }
 
 int panel_reserved(void)
 {
-    return cfg.panel_height;
-}
-
-static int panel_y(void)
-{
-    return cfg.panel_top ? 0 : sc.sh - cfg.panel_height;
-}
-
-static int baseline(int y0)
-{
-    return y0 + (cfg.panel_height + sc.font_ascent - sc.font_descent) / 2;
+    return reserve_top();
 }
 
 static void format_now(char *buf, size_t size, const char *fmt)
@@ -77,131 +66,133 @@ static void format_now(char *buf, size_t size, const char *fmt)
     struct tm tm;
 
     localtime_r(&now, &tm);
-    if (strftime(buf, size, fmt, &tm) == 0)
+    if (!fmt || !*fmt || strftime(buf, size, fmt, &tm) == 0)
         buf[0] = '\0';
 }
 
-static int two_line_clock(void)
+static void bar_paint_bg(void)
 {
-    return cfg.panel_height >= 30 && cfg.clock_date_format[0] != '\0';
+    int y;
+
+    for (y = 0; y < bar_h; y++) {
+        unsigned long c = ui_mix(ui_wallpaper_color(y), cfg.col_panel_bg, 76);
+
+        XSetForeground(sc.dpy, sc.gc, c);
+        XFillRectangle(sc.dpy, sc.panel, sc.gc, 0, y, (unsigned)sc.panel_w, 1);
+    }
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_panel_bg, 0xffffffUL, 7));
+    XFillRectangle(sc.dpy, sc.panel, sc.gc, 0, 0, (unsigned)sc.panel_w, 1);
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_panel_bg, 0x000000UL, 45));
+    XFillRectangle(sc.dpy, sc.panel, sc.gc, 0, bar_h - 1,
+                   (unsigned)sc.panel_w, 1);
 }
 
-/* ------------------------------------------------------------------ icons */
-
-static void icon_launcher(int y0)
+static void bar_menu_pill(int x, int wd, int open)
 {
-    int cx = LAUNCHER_W / 2;
-    int cy = y0 + cfg.panel_height / 2;
-    int s = 7, g = 3, x0, y0i, i, j;
+    unsigned long bg = open ? ui_mix(cfg.col_panel_bg, 0xffffffUL, 17)
+                            : ui_mix(cfg.col_panel_bg, 0xffffffUL, 10);
 
-    x0 = cx - s - g / 2;
-    y0i = cy - s - g / 2;
-    /* Harbor mark: four calm tiles with a soft top edge, not flat neon */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    for (i = 0; i < 2; i++)
-        for (j = 0; j < 2; j++)
-            XFillRectangle(sc.dpy, sc.panel, sc.gc, x0 + i * (s + g),
-                           y0i + j * (s + g), (unsigned)s, (unsigned)s);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_title_fg);
-    for (i = 0; i < 2; i++)
-        for (j = 0; j < 2; j++)
-            XFillRectangle(sc.dpy, sc.panel, sc.gc, x0 + i * (s + g),
-                           y0i + j * (s + g), (unsigned)s, 1);
+    ui_round_fill(sc.panel, x + 2, 3, wd - 4, bar_h - 6, 5, bg);
 }
 
-static void icon_network(int x, int cy, unsigned long fg, unsigned long bg)
+static void bar_open_menu(int kind, int x)
 {
-    XPoint tri[3];
+    static MenuEntry win_items[32];
+    static MenuEntry file_items[8];
+    static MenuEntry help_items[6];
+    MenuEntry *list = NULL;
+    int n = 0;
+    int i, count;
 
-    (void)bg;
-    tri[0].x = (short)(x + 5);
-    tri[0].y = (short)(cy - 6);
-    tri[1].x = (short)(x + 11);
-    tri[1].y = (short)(cy - 6);
-    tri[2].x = (short)(x + 8);
-    tri[2].y = (short)(cy - 1);
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XFillPolygon(sc.dpy, sc.panel, sc.gc, tri, 3, Convex, CoordModeOrigin);
+    if (!menu_is_open())
+        open_kind = -1;
+    if (open_kind == kind) {
+        menu_hide();
+        open_kind = -1;
+        return;
+    }
+    menu_hide();
+    open_kind = kind;
 
-    tri[0].x = (short)(x + 5);
-    tri[0].y = (short)(cy + 2);
-    tri[1].x = (short)(x + 11);
-    tri[1].y = (short)(cy + 2);
-    tri[2].x = (short)(x + 8);
-    tri[2].y = (short)(cy + 7);
-    XFillPolygon(sc.dpy, sc.panel, sc.gc, tri, 3, Convex, CoordModeOrigin);
+#define ADD(arr, L, C) do { \
+        str_copy(arr[n].label, sizeof(arr[0].label), (L)); \
+        str_copy(arr[n].cmd, sizeof(arr[0].cmd), (C)); \
+        n++; \
+    } while (0)
+
+    if (kind == MB_FILE) {
+        const char *t = cur_app[0] ? cur_app : "SCDE";
+        char label[96];
+
+        snprintf(label, sizeof(label), "About %.48s", t);
+        ADD(file_items, label, "@wm-about");
+        ADD(file_items, "-", "");
+        snprintf(label, sizeof(label), "Hide %.48s", t);
+        ADD(file_items, label, "@wm-hide");
+        snprintf(label, sizeof(label), "Close %.48s", t);
+        ADD(file_items, label, "@wm-close");
+        ADD(file_items, "-", "");
+        ADD(file_items, "Quit SCDE", "@logout");
+        list = file_items;
+    } else if (kind == MB_WINDOW) {
+        taskbar_sync();
+        count = taskbar_count();
+        ADD(win_items, "Minimize", "@wm-hide");
+        ADD(win_items, "Show Desktop", "@wm-desktop");
+        ADD(win_items, "-", "");
+        for (i = 0; i < count && n < 30; i++) {
+            const TaskEntry *t = taskbar_at(i);
+            char cmd[32];
+
+            if (!t)
+                break;
+            snprintf(cmd, sizeof(cmd), "@wm-focus %d", i);
+            ADD(win_items, t->title[0] ? t->title : "Window", cmd);
+        }
+        list = win_items;
+    } else {
+        ADD(help_items, "About SCDE", "@wm-about-scde");
+        ADD(help_items, "Keyboard Shortcuts", "@wm-keys");
+        ADD(help_items, "-", "");
+        ADD(help_items, "Security Center", "@security");
+        list = help_items;
+    }
+#undef ADD
+
+    if (list && n > 0)
+        menu_show_custom(list, n, x, menubar_h());
 }
 
-static void icon_volume(int x, int cy, unsigned long fg)
+static const char *display_app_name(void)
 {
-    XPoint tri[3];
-
-    tri[0].x = (short)(x + 4);
-    tri[0].y = (short)(cy - 4);
-    tri[1].x = (short)(x + 8);
-    tri[1].y = (short)(cy - 4);
-    tri[2].x = (short)(x + 8);
-    tri[2].y = (short)(cy + 4);
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XFillPolygon(sc.dpy, sc.panel, sc.gc, tri, 3, Convex, CoordModeOrigin);
-    XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 8, cy - 4, 3, 8);
-    XDrawArc(sc.dpy, sc.panel, sc.gc, x + 8, cy - 8, 10, 16,
-             (300 << 6), (120 << 6));
+    if (strcmp(cur_app, "File Manager") == 0)
+        return "Files";
+    if (strcmp(cur_app, "SCDE Security") == 0)
+        return "Security";
+    return cur_app;
 }
-
-static void icon_battery(int x, int cy, unsigned long fg, unsigned long bg)
-{
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XDrawRectangle(sc.dpy, sc.panel, sc.gc, x + 3, cy - 6, 14, 11);
-    XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 18, cy - 3, 2, 5);
-    XSetForeground(sc.dpy, sc.gc, bg);
-    XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 5, cy - 4, 8, 7);
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XFillRectangle(sc.dpy, sc.panel, sc.gc, x + 5, cy - 4, 5, 7);
-}
-
-/* Security Center: a filled shield, accent colour while protection runs */
-static void icon_shield(int x, int cy, unsigned long fg)
-{
-    XPoint p[5];
-
-    p[0].x = x;
-    p[0].y = cy - 7;
-    p[1].x = x + 14;
-    p[1].y = cy - 7;
-    p[2].x = x + 14;
-    p[2].y = cy;
-    p[3].x = x + 7;
-    p[3].y = cy + 8;
-    p[4].x = x;
-    p[4].y = cy;
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XFillPolygon(sc.dpy, sc.panel, sc.gc, p, 5, Convex, CoordModeOrigin);
-}
-
-/* ----------------------------------------------------------------- panel */
 
 void panel_create(void)
 {
     XSetWindowAttributes wa;
-    int y = panel_y();
 
+    bar_h = menubar_h();
     sc.panel_w = sc.sw;
     wa.override_redirect = True;
     wa.background_pixel = cfg.col_panel_bg;
     wa.event_mask = ExposureMask | ButtonPressMask | PointerMotionMask |
                     ButtonReleaseMask;
 
-    sc.panel = XCreateWindow(sc.dpy, sc.root, 0, y, (unsigned)sc.panel_w,
-                             (unsigned)cfg.panel_height, 0, CopyFromParent,
-                             InputOutput, CopyFromParent,
+    sc.panel = XCreateWindow(sc.dpy, sc.root, 0, 0, (unsigned)sc.panel_w,
+                             (unsigned)bar_h, 0, CopyFromParent, InputOutput,
+                             CopyFromParent,
                              CWOverrideRedirect | CWBackPixel | CWEventMask,
                              &wa);
-    XStoreName(sc.dpy, sc.panel, "scde-panel");
-
+    XStoreName(sc.dpy, sc.panel, "scde-menubar");
     clock_has_seconds = strchr(cfg.clock_format, 'S') != NULL;
     format_now(clock_str, sizeof(clock_str), cfg.clock_format);
-    format_now(date_str, sizeof(date_str), cfg.clock_date_format);
+
+    dock_create();
 
     XMapRaised(sc.dpy, sc.panel);
     panel_update();
@@ -209,6 +200,7 @@ void panel_create(void)
 
 void panel_destroy(void)
 {
+    dock_destroy();
     if (sc.panel) {
         XDestroyWindow(sc.dpy, sc.panel);
         sc.panel = None;
@@ -217,292 +209,129 @@ void panel_destroy(void)
 
 void panel_raise(void)
 {
+    dock_raise();
     if (sc.panel)
         XRaiseWindow(sc.dpy, sc.panel);
 }
 
 void panel_update(void)
 {
-    int y0, x, i, avail, n, w, shown, right;
+    int x, i, bl;
+    const char *active_title;
 
     if (!sc.panel)
         return;
 
-    /* single taskbar registry: managed clients first (mapping order),
-       then the registered internal application windows */
     taskbar_sync();
-    n = taskbar_count();
+    active_title = taskbar_active_title();
+    str_copy(cur_app, sizeof(cur_app),
+             active_title && *active_title ? active_title : "SCDE");
 
-    y0 = 0;
+    bar_h = menubar_h();
     clock_str[0] = '\0';
-    date_str[0] = '\0';
-    if (cfg.show_clock) {
+    if (cfg.show_clock)
         format_now(clock_str, sizeof(clock_str), cfg.clock_format);
-        format_now(date_str, sizeof(date_str), cfg.clock_date_format);
-    }
 
-    clock_w = cfg.show_clock && clock_str[0] ? text_width(clock_str) + 20 : 0;
-    if (two_line_clock() && date_str[0]) {
-        int dw = text_width(date_str) + 20;
-        if (dw > clock_w)
-            clock_w = dw;
-    }
+    clock_w = cfg.show_clock && clock_str[0] ? text_width(clock_str) + 18 : 0;
     tray_w = cfg.show_tray ? TRAY_ICON_W * 4 : 0;
-    desk_w = cfg.show_desktop_btn ? DESKTOP_W : 0;
 
-    /* drop the tray (and then the clock) instead of letting it run into the
-       task buttons on a narrow screen */
     tray_draw = tray_w > 0 &&
-                sc.sw - clock_w - tray_w - desk_w - 8 - (LAUNCHER_W + 6) >= 8;
+                sc.sw - clock_w - tray_w - 16 - 260 >= 8;
     clock_draw = clock_w > 0 &&
-                 sc.sw - clock_w - (tray_draw ? tray_w : 0) - desk_w - 8 -
-                     (LAUNCHER_W + 6) >= 8;
+                 sc.sw - (tray_draw ? tray_w : 0) - clock_w - 16 - 260 >= 8;
     if (!clock_draw)
         tray_draw = 0;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
-    XFillRectangle(sc.dpy, sc.panel, sc.gc, 0, 0, (unsigned)sc.panel_w,
-                   (unsigned)cfg.panel_height);
+    bar_paint_bg();
 
-    /* launcher: rounded dock chip on hover, quiet mark */
-    if (hover_launcher) {
-        chip(sc.panel, 3, y0 + 2, LAUNCHER_W - 6, cfg.panel_height - 4, 3,
-             cfg.col_btn_hover);
-    }
-    icon_launcher(y0);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-    XDrawRectangle(sc.dpy, sc.panel, sc.gc, LAUNCHER_W, 4, 0,
-                   (unsigned)(cfg.panel_height - 8));
-
-    x = LAUNCHER_W + 6;
-    right = sc.sw - (clock_draw ? clock_w : 0) - (tray_draw ? tray_w : 0) -
-            desk_w - 8;
-    avail = right - x;
-    if (avail < 0)
-        avail = 0;
-
-    shown = n;
-    w = BTN_MAX_W;
-    if (n > 0) {
-        if (avail < 8) {
-            shown = 0;                  /* no room for task buttons at all */
-        } else {
-            w = avail / n;
-            if (w > BTN_MAX_W)
-                w = BTN_MAX_W;
-            if (w < BTN_MIN_W) {
-                shown = avail / BTN_MIN_W;
-                if (shown < 1)
-                    shown = 1;
-                if (shown > n)
-                    shown = n;
-                w = avail / shown;
-                if (w > BTN_MAX_W)
-                    w = BTN_MAX_W;
-                if (w < 8)
-                    shown = 0;
-            }
-        }
-    }
-
-    nbtns = 0;
-    for (i = 0; i < shown; i++) {
-        const TaskEntry *t = taskbar_at(i);
-        char label[NAME_MAX_LEN];
-        int active;
-        unsigned long bg;
-        unsigned long fg;
-        unsigned long glyph_fg;
-        int bl;
-
-        if (!t)
-            break;
-        active = t->focused;
-
-        if (x + 2 >= right)
-            break;
-        btns[nbtns].task = i;
-        btns[nbtns].x = x;
-        btns[nbtns].w = w;
-        nbtns++;
-
-        /* macOS dock: rounded tile until hovered / focused, plus a small
-           running dot under the app mark (accent for the focused one) */
-        bg = 0;
-        if (active)
-            bg = cfg.col_btn_active;
-        else if (i == hover_task)
-            bg = cfg.col_btn_hover;
-        if (bg)
-            chip(sc.panel, x + 1, y0 + 3, w - 5, cfg.panel_height - 6, 3,
-                 bg);
-        {
-            unsigned long dc;
-
-            if (active)
-                dc = cfg.col_border_focus;
-            else if (t->hidden)
-                dc = dim_color(cfg.col_panel_fg, bg ? bg : cfg.col_panel_bg);
-            else
-                dc = cfg.col_panel_fg;
-            XSetForeground(sc.dpy, sc.gc, dc);
-            XFillArc(sc.dpy, sc.panel, sc.gc, x + 11,
-                     y0 + cfg.panel_height - 9, 5, 5, 0, 360 * 64);
-        }
-
-        bl = baseline(y0);
-        if (active)
-            fg = 0xedf0f5UL;
-        else if (t->hidden)
-            fg = dim_color(cfg.col_panel_fg, bg ? bg : cfg.col_panel_bg);
-        else
-            fg = cfg.col_panel_fg;
-
-        /* mini application mark left of the label: internal applications
-           get their own calm tone so File Manager / SCDE Security read
-           as separate apps, not duplicates of a client window */
-        if (t->app_type == TASK_APP_FM)
-            glyph_fg = 0xd9a84eUL;
-        else if (t->app_type == TASK_APP_SECURITY)
-            glyph_fg = 0x7c9cbfUL;
-        else
-            glyph_fg = fg;
-        {
-            int gy = y0 + (cfg.panel_height - 14) / 2;
-
-            if (cfg.panel_height >= 26)
-                gy -= 3;                 /* room for the running dot below */
-            draw_win_glyph(sc.panel, x + 6, gy, 14, glyph_fg,
-                           bg ? bg : cfg.col_panel_bg);
-        }
-        {
-            int bi = nbtns - 1;
-            int has_close = w >= 64;
-            int room = w - 34 - (has_close ? BTN_CLOSE_W : 0);
-
-            label[0] = '\0';
-            if (room > 0)
-                fit_text(label, sizeof(label), t->title, room);
-            draw_text(sc.panel, x + 26, bl, fg, label);
-
-            /* close (X) at the right end of a wide enough task button */
-            if (has_close) {
-                int zx = x + w - 4 - BTN_CLOSE_W;
-                int zy = y0 + 4;
-                int zh = cfg.panel_height - 8;
-                int on = bi == hover_task && hover_task_close;
-
-                if (on) {
-                    XSetForeground(sc.dpy, sc.gc, cfg.col_close_hover);
-                    XFillRectangle(sc.dpy, sc.panel, sc.gc, zx, zy,
-                                   (unsigned)BTN_CLOSE_W, (unsigned)zh);
-                }
-                XSetForeground(sc.dpy, sc.gc, on ? 0xedf0f5UL : fg);
-                {
-                    int cx = zx + BTN_CLOSE_W / 2;
-                    int cy = zy + zh / 2;
-
-                    XDrawLine(sc.dpy, sc.panel, sc.gc, cx - 4, cy - 4,
-                              cx + 4, cy + 4);
-                    XDrawLine(sc.dpy, sc.panel, sc.gc, cx - 4, cy + 4,
-                              cx + 4, cy - 4);
-                }
-            }
-        }
-        x += w;
-    }
-
-    /* right side: tray, clock, show desktop (laid out left to right) */
     {
-        int rx = sc.sw - desk_w;
-        int clock_x0 = rx - clock_w;
-        int bl = baseline(y0);
-        int cy = y0 + cfg.panel_height / 2;
+        const char *labels[MB_COUNT];
+        const char *app = display_app_name();
+        int w;
+        int right_limit = sc.sw - 16 - (tray_draw ? tray_w : 0) -
+                          (clock_draw ? clock_w + 10 : 0);
 
-        if (clock_x0 < x + 8)
-            clock_x0 = x + 8;
+        labels[MB_LOGO] = NULL;
+        labels[MB_APP] = app;
+        labels[MB_FILE] = "File";
+        labels[MB_WINDOW] = "Window";
+        labels[MB_HELP] = "Help";
 
-        if (tray_draw) {
-            int tx = clock_x0 - tray_w;
-            if (tx < x + 8)
-                tx = x + 8;
-
-            if (hover_tray == 0) {
-                XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-                XFillRectangle(sc.dpy, sc.panel, sc.gc, tx, y0 + 4,
-                               (unsigned)TRAY_ICON_W,
-                               (unsigned)(cfg.panel_height - 8));
+        x = 8;
+        for (i = 0; i < MB_COUNT; i++) {
+            if (i == MB_LOGO)
+                w = BAR_MARK_W;
+            else if (i == MB_APP)
+                w = text_width_bold(labels[i]) + 2 * BAR_ITEM_PAD;
+            else
+                w = text_width(labels[i]) + 2 * BAR_ITEM_PAD;
+            if (i == MB_APP && x + w > right_limit) {
+                w = right_limit - x;
+                if (w < 56)
+                    w = 56;
             }
-            icon_network(tx + 5, cy, cfg.col_panel_fg, cfg.col_panel_bg);
-            tx += TRAY_ICON_W;
-            if (hover_tray == 1) {
-                XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-                XFillRectangle(sc.dpy, sc.panel, sc.gc, tx, y0 + 4,
-                               (unsigned)TRAY_ICON_W,
-                               (unsigned)(cfg.panel_height - 8));
+            items[i].x = x;
+            items[i].w = w;
+            if (i == hover_item || open_kind == i)
+                bar_menu_pill(x, w, open_kind == i);
+            if (i == MB_LOGO) {
+                ui_draw_launcher_mark(sc.panel, x + w / 2, bar_h / 2, 17,
+                                      cfg.col_panel_fg);
+            } else {
+                bl = (bar_h + sc.font_ascent - sc.font_descent) / 2;
+                if (i == MB_APP)
+                    draw_text_clip_font(sc.panel, sc.font_bold, x + BAR_ITEM_PAD,
+                                        x + w - 6, bl, 0xffffffUL, labels[i]);
+                else
+                    draw_text_clip(sc.panel, x + BAR_ITEM_PAD, x + w - 6, bl,
+                                   cfg.col_panel_fg, labels[i]);
             }
-            icon_volume(tx + 5, cy, cfg.col_panel_fg);
-            tx += TRAY_ICON_W;
-            if (hover_tray == 2) {
-                XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-                XFillRectangle(sc.dpy, sc.panel, sc.gc, tx, y0 + 4,
-                               (unsigned)TRAY_ICON_W,
-                               (unsigned)(cfg.panel_height - 8));
-            }
-            icon_battery(tx + 5, cy, cfg.col_panel_fg, cfg.col_btn_inactive);
-            tx += TRAY_ICON_W;
-            if (hover_tray == 3) {
-                XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-                XFillRectangle(sc.dpy, sc.panel, sc.gc, tx, y0 + 4,
-                               (unsigned)TRAY_ICON_W,
-                               (unsigned)(cfg.panel_height - 8));
-            }
-            icon_shield(tx + 4, cy,
-                        scde_security_get_scan_mode() == SCDE_SCAN_OFF
-                            ? dim_color(cfg.col_panel_fg, cfg.col_panel_bg)
-                            : cfg.col_border_focus);
+            x += w + 1;
         }
+    }
+
+    {
+        int rx = sc.sw - 10;
+        int cy = bar_h / 2;
+
+        bl = (bar_h + sc.font_ascent - sc.font_descent) / 2;
 
         if (clock_draw && clock_str[0]) {
-            int cx;
+            int cx = rx - clock_w + (clock_w - text_width(clock_str)) / 2;
 
-            if (two_line_clock() && date_str[0]) {
-                int half = cfg.panel_height / 2;
-                int base1 = y0 + half - 1 - sc.font_descent / 2;
-                int base2 = y0 + cfg.panel_height - 5 - sc.font_descent;
-
-                cx = clock_x0 + (clock_w - text_width(clock_str)) / 2;
-                draw_text(sc.panel, cx, base1, cfg.col_panel_fg, clock_str);
-                cx = clock_x0 + (clock_w - text_width(date_str)) / 2;
-                draw_text(sc.panel, cx, base2, cfg.col_panel_fg, date_str);
-            } else {
-                cx = rx - 10 - text_width(clock_str);
-                if (cx < x)
-                    cx = x;
-                draw_text(sc.panel, cx, bl, cfg.col_panel_fg, clock_str);
-            }
+            draw_text(sc.panel, cx, bl, cfg.col_panel_fg, clock_str);
         }
 
-        if (cfg.show_desktop_btn) {
-            if (hover_desktop) {
-                XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
-                XFillRectangle(sc.dpy, sc.panel, sc.gc, rx, 0,
-                               (unsigned)DESKTOP_W,
-                               (unsigned)cfg.panel_height);
+        if (tray_draw) {
+            int tx = (clock_draw ? rx - clock_w - 8 : rx) - tray_w;
+
+            if (tx < items[MB_HELP].x + items[MB_HELP].w + 8)
+                tx = items[MB_HELP].x + items[MB_HELP].w + 8;
+            for (i = 0; i < 4; i++) {
+                if (hover_tray == i)
+                    ui_round_fill(sc.panel, tx + 1, 3, TRAY_ICON_W - 2,
+                                  bar_h - 6, 5,
+                                  ui_mix(cfg.col_panel_bg, 0xffffffUL, 12));
+                if (i == 0)
+                    ui_draw_wifi(sc.panel, tx + 5, cy, cfg.col_panel_fg);
+                else if (i == 1)
+                    ui_draw_volume(sc.panel, tx + 5, cy, cfg.col_panel_fg);
+                else if (i == 2)
+                    ui_draw_battery(sc.panel, tx + 5, cy, cfg.col_panel_fg,
+                                    cfg.col_panel_bg);
+                else
+                    ui_draw_shield(sc.panel, tx + 5, cy, 14,
+                                   scde_security_get_scan_mode() ==
+                                           SCDE_SCAN_OFF
+                                       ? ui_dim(cfg.col_panel_fg,
+                                                cfg.col_panel_bg)
+                                       : ui_accent());
+                tx += TRAY_ICON_W;
             }
-            XSetForeground(sc.dpy, sc.gc, cfg.col_panel_fg);
-            XDrawLine(sc.dpy, sc.panel, sc.gc, rx, 4, rx,
-                      cfg.panel_height - 4);
         }
     }
 
-    /* Harbor hairline on the desktop-facing edge, quiet separation */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    if (cfg.panel_top)
-        XDrawLine(sc.dpy, sc.panel, sc.gc, 0, cfg.panel_height - 1, sc.sw,
-                  cfg.panel_height - 1);
-    else
-        XDrawLine(sc.dpy, sc.panel, sc.gc, 0, 0, sc.sw, 0);
+    dock_update();
 }
 
 void panel_expose(XExposeEvent *ev)
@@ -513,78 +342,66 @@ void panel_expose(XExposeEvent *ev)
 
 int panel_button_press(XButtonEvent *ev)
 {
-    int i, rx;
+    int i;
 
     if (ev->button == Button4 || ev->button == Button5)
         return 1;
-
     if (ev->button != Button1)
         return 1;
+    if (!menu_is_open())
+        open_kind = -1;
 
-    if (ev->x < LAUNCHER_W) {
-        if (menu_is_open())
-            menu_hide();
-        else
-            menu_show();
-        return 1;
-    }
-
-    for (i = 0; i < nbtns; i++) {
-        if (ev->x >= btns[i].x && ev->x < btns[i].x + btns[i].w) {
-            if (btns[i].w >= 64) {
-                int zx = btns[i].x + btns[i].w - 4 - BTN_CLOSE_W;
-
-                if (ev->x >= zx && ev->x < zx + BTN_CLOSE_W) {
-                    taskbar_close(btns[i].task);
-                    return 1;
+    for (i = 0; i < MB_COUNT; i++) {
+        if (ev->x >= items[i].x && ev->x < items[i].x + items[i].w) {
+            if (i == MB_LOGO) {
+                if (menu_is_open()) {
+                    menu_hide();
+                    open_kind = -1;
+                } else {
+                    menu_show();
+                    open_kind = MB_LOGO;
                 }
+            } else if (i == MB_APP) {
+                bar_open_menu(MB_FILE, items[i].x);
+            } else {
+                bar_open_menu(i, items[i].x);
             }
-            taskbar_activate(btns[i].task);
+            panel_update();
             return 1;
         }
     }
 
     if (tray_draw) {
-        int tx = sc.sw - desk_w - clock_w - tray_w;
+        int tx = (clock_draw ? sc.sw - 10 - clock_w - 8 : sc.sw - 10) -
+                 tray_w;
 
+        if (tx < items[MB_HELP].x + items[MB_HELP].w + 8)
+            tx = items[MB_HELP].x + items[MB_HELP].w + 8;
         if (ev->x >= tx && ev->x < tx + tray_w) {
             if ((ev->x - tx) / TRAY_ICON_W == 3)
-                security_gui_toggle();          /* shield: Security Center */
+                security_gui_toggle();
             return 1;
         }
-    }
-
-    rx = sc.sw - desk_w;
-    if (cfg.show_desktop_btn && ev->x >= rx) {
-        show_desktop_toggle();
-        return 1;
     }
     return 1;
 }
 
 void panel_motion(XMotionEvent *ev)
 {
-    int i, found = -1;
-    int lch = (ev->x < LAUNCHER_W);
-    int dch = 0;
-    int tch = -1;
-    int tcc = 0;
+    int i, found = -1, tch = -1;
 
-    for (i = 0; i < nbtns; i++) {
-        if (ev->x >= btns[i].x && ev->x < btns[i].x + btns[i].w) {
+    for (i = 0; i < MB_COUNT; i++) {
+        if (ev->x >= items[i].x && ev->x < items[i].x + items[i].w) {
             found = i;
             break;
         }
     }
-    if (found >= 0 && btns[found].w >= 64) {
-        int zx = btns[found].x + btns[found].w - 4 - BTN_CLOSE_W;
-
-        tcc = ev->x >= zx && ev->x < zx + BTN_CLOSE_W;
-    }
-    if (cfg.show_desktop_btn && ev->x >= sc.sw - desk_w)
-        dch = 1;
     if (tray_draw) {
-        int tx = sc.sw - desk_w - clock_w - tray_w;
+        int tx = (clock_draw ? sc.sw - 10 - clock_w - 8 : sc.sw - 10) -
+                 tray_w;
+
+        if (tx < items[MB_HELP].x + items[MB_HELP].w + 8)
+            tx = items[MB_HELP].x + items[MB_HELP].w + 8;
         for (i = 0; i < 4; i++) {
             if (ev->x >= tx + i * TRAY_ICON_W &&
                 ev->x < tx + (i + 1) * TRAY_ICON_W)
@@ -592,13 +409,9 @@ void panel_motion(XMotionEvent *ev)
         }
     }
 
-    if (lch != hover_launcher || dch != hover_desktop || tch != hover_tray ||
-        found != hover_task || tcc != hover_task_close) {
-        hover_launcher = lch;
-        hover_desktop = dch;
+    if (found != hover_item || tch != hover_tray) {
+        hover_item = found;
         hover_tray = tch;
-        hover_task = found;
-        hover_task_close = tcc;
         panel_update();
     }
 }
@@ -622,11 +435,9 @@ int panel_timeout_ms(void)
 
     if (!cfg.show_clock)
         return -1;
-
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
         return 1000;
     localtime_r(&ts.tv_sec, &tm);
-
     if (clock_has_seconds)
         ms = 1000 - (int)(ts.tv_nsec / 1000000);
     else

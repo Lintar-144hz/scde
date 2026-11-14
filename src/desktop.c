@@ -73,12 +73,14 @@ static int icon_h(void)
 
 static int top_limit(void)
 {
-    return cfg.panel_top ? panel_reserved() + DESK_PAD : DESK_PAD;
+    /* icons start below the top menu bar */
+    return reserve_top() + DESK_PAD;
 }
 
 static int bottom_limit(void)
 {
-    int bottom = sc.sh - (cfg.panel_top ? 0 : panel_reserved());
+    /* icons end above the floating dock */
+    int bottom = sc.sh - reserve_bottom();
 
     return bottom - DESK_PAD - icon_h();
 }
@@ -1051,6 +1053,7 @@ void desktop_root_property(XPropertyEvent *ev)
         return;
     desk_clear_all();                   /* a new wallpaper replaced ours */
     desktop_paint();
+    dock_resample_bg();                 /* keep the dock corners blended */
 }
 
 /* --------------------------------------------------------------- public -- */

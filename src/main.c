@@ -10,6 +10,7 @@
 #include <scde/security.h>
 #include <scde/security_bait.h>
 #include <scde/security_mirage.h>
+#include <scde/security_resource.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -135,43 +136,6 @@ static int acquire_lock(void)
 }
 
 /* ------------------------------------------------------------ font/atoms -- */
-
-static void load_font(void)
-{
-    static const char *fallbacks[] = {
-        "-*-fixed-medium-r-*-*-13-*-*-*-*-*-*-*",
-        "9x15", "7x13", "fixed", NULL
-    };
-    int i;
-
-    if (cfg.font[0]) {
-        sc.font = XLoadQueryFont(sc.dpy, cfg.font);
-        if (sc.font)
-            return;
-        log_msg("font '%s' unavailable, trying fallbacks", cfg.font);
-    }
-    for (i = 0; fallbacks[i]; i++) {
-        sc.font = XLoadQueryFont(sc.dpy, fallbacks[i]);
-        if (sc.font) {
-            log_msg("using font '%s'", fallbacks[i]);
-            return;
-        }
-    }
-    log_msg("no core font found - text will not be drawn");
-    sc.font = NULL;
-    sc.font_ascent = 10;
-    sc.font_descent = 3;
-    sc.font_height = 13;
-}
-
-static void setup_font_metrics(void)
-{
-    if (sc.font) {
-        sc.font_ascent = sc.font->ascent;
-        sc.font_descent = sc.font->descent;
-        sc.font_height = sc.font->ascent + sc.font->descent;
-    }
-}
 
 static void setup_atoms(void)
 {
@@ -381,6 +345,8 @@ static void dispatch(XEvent *ev)
             desktop_motion(&ev->xmotion);
         else if (ev->xmotion.window == sc.panel)
             panel_motion(&ev->xmotion);
+        else if (ev->xmotion.window == sc.dock)
+            dock_motion(&ev->xmotion);
         else if (ev->xmotion.window == sc.menu)
             menu_motion(&ev->xmotion);
         else
@@ -526,8 +492,7 @@ static void cleanup(void)
     }
     if (sc.gc)
         XFreeGC(sc.dpy, sc.gc);
-    if (sc.font)
-        XFreeFont(sc.dpy, sc.font);
+    ui_cleanup_fonts();
     if (sc.cur_normal)
         XFreeCursor(sc.dpy, sc.cur_normal);
     if (sc.cur_move)
@@ -621,6 +586,19 @@ int main(int argc, char **argv)
     }
     config_add_defaults_menu(&cfg);
 
+    /* sandbox resource limits: one ceiling per sandboxed process.
+       RAM comes from sandbox_memory_mb (default 3072 MiB = 3 GiB); SCDE
+       imposes no CPU quota of its own - the host scheduler decides. */
+    {
+        scde_resource_limits_t rl;
+
+        scde_resource_defaults(&rl);
+        rl.ram_bytes = (unsigned long)cfg.sandbox_memory_mb * 1024ul *
+                       1024ul;
+        rl.cpu_seconds = 0;
+        scde_resource_set(&rl);
+    }
+
     {
         int lock_rc = acquire_lock();
         if (lock_rc == -1)
@@ -650,8 +628,7 @@ int main(int argc, char **argv)
     XSetErrorHandler(on_xerror);
 
     config_resolve_colors(&cfg);
-    load_font();
-    setup_font_metrics();
+    ui_load_fonts();
     setup_atoms();
     setup_cursors();
     setup_root();

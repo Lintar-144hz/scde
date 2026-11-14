@@ -22,16 +22,19 @@
 
 #define FM_W        860
 #define FM_H        600
-#define FM_TITLE_H  26
-#define FM_TOOL_H   36
+#define FM_TITLE_H  30
+#define FM_TOOL_H   40
 #define FM_SB_W     14
 #define FM_PAD      8
 #define FM_SIDE_W   184
+#define FM_CELL_W   92
+#define FM_CELL_H   88
 #define FM_SEARCH_W 150
 #define FM_NAME_MAX 512
 #define FM_PATH_MAX 1024
 #define FM_MAX_BTNS 6
-#define FM_PLACES   7
+#define FM_FAV      7       /* favorites rows: Home .. Videos */
+#define FM_PLACES   8       /* favorites + Computer */
 
 #define FM_MODE_NORMAL  0
 #define FM_MODE_EDIT    1
@@ -79,6 +82,7 @@ static int btn_x[FM_MAX_BTNS], btn_w[FM_MAX_BTNS];
 static int tool_path_x, tool_path_w;
 static int search_x, search_w;
 static int list_x0, list_y0, list_y1, list_w, rows;
+static int grid_cols, grid_rows;
 static int hover_btn, hover_close, hover_side, hover_search;
 static int search_focus;
 static char sbuf[96];
@@ -87,23 +91,56 @@ static char sbuf[96];
 static int *vis_idx;
 static int n_vis, vis_cap;
 
+static const char *const ctx_names[5] = {
+    "Open", "Rename...", "Delete...", "Properties", "Set as wallpaper"
+};
 static int ctx_n, ctx_ids[8], ctx_idx;
 static int ctx_x, ctx_y, ctx_w, ctx_h, ctx_target, ctx_row;
 
 static Time last_click_t;
 static int last_click_i;
 static int show_hidden;
+static int cwd_unreadable;          /* opendir() failed: show an error, not
+                                       a misleading "empty folder" */
 
 static char hist[24][FM_PATH_MAX];
 static int n_hist;
+static char fwd[24][FM_PATH_MAX];        /* forward stack (Finder-like) */
+static int n_fwd;
+static int side_fav_end;                 /* drawn favorite rows (clickable) */
+static int side_loc_drawn;               /* Computer row drawn (clickable) */
 
-enum { BTN_UP, BTN_BACK, BTN_HOME, BTN_NEW, BTN_REFRESH };
+enum { BTN_UP, BTN_BACK, BTN_FWD, BTN_NEW, BTN_REFRESH };
 
 /* ------------------------------------------------------------ helpers -- */
 
 static int fm_row_h(void)
 {
     return sc.font_height + 10;
+}
+
+static int list_head_h(void)
+{
+    return 10;
+}
+
+static int list_rows_y0(void)
+{
+    return list_y0 + list_head_h();
+}
+
+static int fm_grid_index_at(int x, int y)
+{
+    int col, row, v;
+
+    if (x < list_x0 || x >= list_w || y < list_rows_y0() || y >= list_y1)
+        return -1;
+    col = (x - list_x0 - FM_PAD) / FM_CELL_W;
+    row = (y - list_rows_y0() - 4) / FM_CELL_H;
+    if (col < 0 || col >= grid_cols || row < 0 || row >= grid_rows)
+        return -1;
+    v = scroll + row * grid_cols + col;
+    return v >= 0 && v < n_vis ? v : -1;
 }
 
 static void fm_join(char *out, size_t size, const char *dir, const char *name)
@@ -173,22 +210,30 @@ static void utf8_pop(char *s)
 
 /* ------------------------------------------------------ sidebar places -- */
 
-static const char *const place_names[FM_PLACES] = {
+static const char *const fav_names[FM_FAV] = {
     "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures",
     "Videos"
 };
 
-/* index 0 resolves to $HOME itself, the rest to $HOME/<name> */
+static const char *const loc_names[1] = {
+    "Computer"
+};
+
+/* 0..6 resolve to $HOME[/<name>], FM_FAV ("Computer") resolves to "/" */
 static void place_path(int i, char *out, size_t size)
 {
     const char *home = getenv("HOME");
 
+    if (i >= FM_FAV) {
+        str_copy(out, size, "/");
+        return;
+    }
     if (!home || !*home)
         home = "/";
     if (i == 0)
         str_copy(out, size, home);
     else
-        snprintf(out, size, "%s/%s", home, place_names[i]);
+        snprintf(out, size, "%s/%s", home, fav_names[i]);
 }
 
 static int place_selected(int i)
@@ -200,13 +245,13 @@ static int place_selected(int i)
     len = strlen(p);
     if (strcmp(cwd, p) == 0)
         return 1;
-    if (i > 0 && strncmp(cwd, p, len) == 0 && cwd[len] == '/')
+    if (i > 0 && i < FM_FAV && strncmp(cwd, p, len) == 0 && cwd[len] == '/')
         return 1;
     if (i == 0 && cwd[0] != '\0') {
         int j;
 
         /* Home catches everything under $HOME not claimed above */
-        for (j = 1; j < FM_PLACES; j++) {
+        for (j = 1; j < FM_FAV; j++) {
             char q[FM_PATH_MAX];
             size_t ql;
 
@@ -333,9 +378,11 @@ static void fm_reload(void)
     n_ents = 0;
     d = opendir(cwd);
     if (!d) {
+        cwd_unreadable = 1;
         log_msg("fm: cannot open %s: %s", cwd, strerror(errno));
         return;
     }
+    cwd_unreadable = 0;
     while ((de = readdir(d)) != NULL) {
         FmEntry *e;
         char full[FM_PATH_MAX];
@@ -474,6 +521,8 @@ static int fm_cd(const char *dir)
         str_copy(hist[n_hist++], sizeof(hist[0]), cwd);
     str_copy(cwd, sizeof(cwd), real);
     free(real);
+    /* a new location clears the forward stack (Finder semantics) */
+    n_fwd = 0;
     /* a new directory gets a fresh view: the filter belongs to its folder */
     sbuf[0] = '\0';
     search_focus = 0;
@@ -505,37 +554,88 @@ static void fm_cd_parent(void)
     fm_cd(parent);
 }
 
+/* navigate one step back through the history (pushes onto forward) */
+static void fm_go_back(void)
+{
+    char back[FM_PATH_MAX];
+    char *r;
+
+    if (n_hist <= 0)
+        return;
+    if (n_fwd < (int)(sizeof(fwd) / sizeof(fwd[0])))
+        str_copy(fwd[n_fwd++], sizeof(fwd[0]), cwd);
+    str_copy(back, sizeof(back), hist[--n_hist]);
+    hist[n_hist][0] = '\0';
+    r = realpath(back, NULL);
+    if (!r)
+        return;
+    str_copy(cwd, sizeof(cwd), r);
+    free(r);
+    sbuf[0] = '\0';
+    search_focus = 0;
+    fm_reload();
+    sel = scroll = 0;
+    if (n_vis > 0)
+        sel = vis_idx[0];
+    fm_set_name();
+}
+
+/* navigate one step forward through the history (pushes onto back) */
+static void fm_go_forward(void)
+{
+    char go[FM_PATH_MAX];
+    char *r;
+
+    if (n_fwd <= 0)
+        return;
+    if (n_hist < (int)(sizeof(hist) / sizeof(hist[0])))
+        str_copy(hist[n_hist++], sizeof(hist[0]), cwd);
+    str_copy(go, sizeof(go), fwd[--n_fwd]);
+    fwd[n_fwd][0] = '\0';
+    r = realpath(go, NULL);
+    if (!r)
+        return;
+    str_copy(cwd, sizeof(cwd), r);
+    free(r);
+    sbuf[0] = '\0';
+    search_focus = 0;
+    fm_reload();
+    sel = scroll = 0;
+    if (n_vis > 0)
+        sel = vis_idx[0];
+    fm_set_name();
+}
+
 /* -------------------------------------------------------------- layout -- */
 
 static void fm_layout(void)
 {
+    /* Finder-compact toolbar: back, forward, up, new, refresh */
     static const char *const labels[FM_MAX_BTNS] = {
-        "Up", "Back", "Home", "New Folder", "Refresh"
+        "Up", "Back", "Forward", "New Folder", "Refresh"
     };
     static const int ids[FM_MAX_BTNS] = {
-        BTN_UP, BTN_BACK, BTN_HOME, BTN_NEW, BTN_REFRESH
+        BTN_UP, BTN_BACK, BTN_FWD, BTN_NEW, BTN_REFRESH
     };
     int i, x;
-    int ph = panel_reserved();
+    int top = reserve_top();
+    int bottom = sc.sh - reserve_bottom();
 
     fw = FM_W;
     if (fw > sc.sw - 40)
         fw = sc.sw - 40;
     fh = FM_H;
-    if (fh > sc.sh - ph - 40)
-        fh = sc.sh - ph - 40;
+    if (fh > bottom - top - 40)
+        fh = bottom - top - 40;
     if (fh < 260)
         fh = 260;
     if (fm_win == None) {                /* only centre a fresh window;
                                             a dragged one keeps its spot */
         fx = (sc.sw - fw) / 2;
         {
-            int top = cfg.panel_top ? ph : 0;
-            int bottom = cfg.panel_top ? sc.sh : sc.sh - ph;
-
             fy = top + (bottom - top - fh) / 2;
-            if (fy < 0)
-                fy = 0;
+            if (fy < top)
+                fy = top;
         }
     }
 
@@ -568,79 +668,48 @@ static void fm_layout(void)
         list_x0 = 0;
     list_y0 = FM_TITLE_H + FM_TOOL_H;
     list_y1 = fh - (sc.font_height + 12);
-    if (list_y1 < list_y0 + fm_row_h())
-        list_y1 = list_y0 + fm_row_h();
+    if (list_y1 < list_y0 + 2 * fm_row_h())
+        list_y1 = list_y0 + 2 * fm_row_h();
     list_w = fw - FM_SB_W;
-    rows = (list_y1 - list_y0) / fm_row_h();
+    grid_cols = (list_w - list_x0 - 2 * FM_PAD) / FM_CELL_W;
+    if (grid_cols < 1)
+        grid_cols = 1;
+    grid_rows = (list_y1 - list_rows_y0() - 4) / FM_CELL_H;
+    if (grid_rows < 1)
+        grid_rows = 1;
+    rows = grid_cols * grid_rows;
     if (rows < 1)
         rows = 1;
 }
 
 /* --------------------------------------------------------------- paint -- */
 
-static void fm_draw_icon(int x, int ycenter, const FmEntry *e)
+static void fm_draw_icon(int x, int y, int size, const FmEntry *e)
 {
-    int h = sc.font_height;
-    int iy = ycenter - 6;
-
-    if (h < 14)
-        iy = ycenter - 6;
-    if (e->is_dir) {
-        /* Harbor folder: tab + calm body, same 16x11 footprint */
-        XSetForeground(sc.dpy, sc.gc, C_FOLDER);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 1, iy - 3, 7, 3);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x, iy, 16, 11);
-        XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 1, iy + 1,
-                       14, 1);
-    } else {
-        /* Harbor file: page with a folded corner + kind stripe */
-        XSetForeground(sc.dpy, sc.gc, C_PAGE);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 1, iy - 2, 13, 16);
-        XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 9, iy - 2, 5, 5);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 4, 7, 1);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 7, 7, 1);
-        XSetForeground(sc.dpy, sc.gc, kind_color(e));
-        XFillRectangle(sc.dpy, fm_win, sc.gc, x + 4, iy + 10, 7, 3);
-    }
-}
-
-/* rounded chip painted onto the toolbar tone: cut corners read as a soft
-   dock button without a compositor */
-static void fm_chip(int x, int y, int wd, int hg, unsigned long fg)
-{
-    int cut = 3;
-
-    if (wd <= 2 * cut || hg <= 2 * cut)
-        return;
-    XSetForeground(sc.dpy, sc.gc, fg);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, x + cut, y, (unsigned)(wd - 2 * cut),
-                   (unsigned)hg);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, x, y + cut, (unsigned)wd,
-                   (unsigned)(hg - 2 * cut));
+    if (e->is_dir)
+        ui_draw_folder(fm_win, x, y, size, strcmp(e->name, "..") == 0);
+    else
+        ui_draw_file(fm_win, x, y, size, kind_color(e));
 }
 
 static void fm_draw_button(int i, int hovered)
 {
     static const char *const labels[FM_MAX_BTNS] = {
-        "Up", "Back", "Home", "New Folder", "Refresh"
+        "Up", "Back", "Forward", "New Folder", "Refresh"
     };
-    int by = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 10)) / 2;
-    int bh = sc.font_height + 10;
+    int by = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 12)) / 2;
+    int bh = sc.font_height + 12;
     int bl;
 
-    /* quiet chip: tone shift on hover, hairline only while hovered */
-    fm_chip(btn_x[i], by, btn_w[i], bh,
-            hovered ? cfg.col_btn_hover : cfg.col_menu_bg);
-    if (hovered) {
-        XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-        XDrawRectangle(sc.dpy, fm_win, sc.gc, btn_x[i], by,
-                       (unsigned)(btn_w[i] - 1), (unsigned)(bh - 1));
-    }
+    ui_round_fill(fm_win, btn_x[i], by, btn_w[i], bh, 8,
+                  hovered ? ui_mix(cfg.col_panel_bg, 0xffffffUL, 17)
+                          : ui_mix(cfg.col_panel_bg, 0xffffffUL, 9));
+    if (hovered)
+        ui_round_outline(fm_win, btn_x[i], by, btn_w[i], bh, 8,
+                         ui_mix(cfg.col_panel_bg, 0xffffffUL, 22));
     bl = by + (bh + sc.font_ascent - sc.font_descent) / 2;
     draw_text(fm_win, btn_x[i] + 10, bl,
-              hovered ? 0xedf0f5UL : cfg.col_menu_fg, labels[i]);
+              hovered ? 0xffffffUL : cfg.col_menu_fg, labels[i]);
 }
 
 static void fm_draw_scrollbar(void)
@@ -650,58 +719,47 @@ static void fm_draw_scrollbar(void)
     int max_scroll = span - rows;
     int thumb_h, thumb_y;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, list_w, list_y0, (unsigned)FM_SB_W,
-                   (unsigned)track_h);
     if (span <= rows || max_scroll <= 0)
         return;
     thumb_h = track_h * rows / span;
-    if (thumb_h < 24)
-        thumb_h = 24;
+    if (thumb_h < 28)
+        thumb_h = 28;
     thumb_y = list_y0 + (track_h - thumb_h) * scroll / max_scroll;
-    XSetForeground(sc.dpy, sc.gc, cfg.col_btn_active);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, list_w + 3, thumb_y,
-                   (unsigned)(FM_SB_W - 6), (unsigned)thumb_h);
+    ui_round_fill(fm_win, list_w + 4, thumb_y, 7, thumb_h, 3,
+                  ui_mix(cfg.col_panel_bg, 0xffffffUL, 24));
 }
 
-/* Harbor search field: inset box, lens mark, placeholder or query + caret */
 static void fm_draw_search(void)
 {
-    int by = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2;
-    int bh = sc.font_height + 8;
+    int by = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 12)) / 2;
+    int bh = sc.font_height + 12;
     int bl = by + (bh + sc.font_ascent - sc.font_descent) / 2;
-    int tx = search_x + 22;
+    int tx = search_x + 26;
 
-    XSetForeground(sc.dpy, sc.gc,
-                   search_focus ? cfg.col_btn_hover : cfg.col_btn_inactive);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, search_x, by, (unsigned)search_w,
-                   (unsigned)bh);
-    XSetForeground(sc.dpy, sc.gc,
-                   search_focus ? cfg.col_border_focus
-                                : cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, fm_win, sc.gc, search_x, by,
-                   (unsigned)(search_w - 1), (unsigned)(bh - 1));
-    /* lens */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_title_fg_inactive);
-    XDrawArc(sc.dpy, fm_win, sc.gc, search_x + 7, by + bh / 2 - 4, 7, 7, 0,
-             360 * 64);
-    XDrawLine(sc.dpy, fm_win, sc.gc, search_x + 12, by + bh / 2 + 2,
-              search_x + 16, by + bh / 2 + 6);
+    ui_round_fill(fm_win, search_x, by, search_w, bh, 9,
+                  search_focus ? ui_mix(cfg.col_panel_bg, 0xffffffUL, 14)
+                               : ui_mix(cfg.col_panel_bg, 0xffffffUL, 7));
+    ui_round_outline(fm_win, search_x, by, search_w, bh, 9,
+                     search_focus ? ui_accent()
+                                  : ui_mix(cfg.col_panel_bg, 0xffffffUL, 18));
+    ui_draw_magnifier(fm_win, search_x + 8, by + bh / 2 - 6, 12,
+                      cfg.col_title_fg_inactive);
     if (sbuf[0] != '\0') {
         int cx;
 
-        draw_text_clip(fm_win, tx, search_x + search_w - 6, bl,
+        draw_text_clip(fm_win, tx, search_x + search_w - 8, bl,
                        cfg.col_menu_fg, sbuf);
         if (search_focus) {
             cx = tx + text_width(sbuf) + 1;
-            if (cx > search_x + search_w - 6)
-                cx = search_x + search_w - 6;
-            XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, cx, bl - sc.font_ascent, 1,
+            if (cx > search_x + search_w - 8)
+                cx = search_x + search_w - 8;
+            XSetForeground(sc.dpy, sc.gc, ui_accent());
+            XFillRectangle(sc.dpy, fm_win, sc.gc, cx,
+                           bl - sc.font_ascent, 1,
                            (unsigned)(sc.font_ascent + sc.font_descent));
         }
     } else {
-        draw_text_clip(fm_win, tx, search_x + search_w - 6, bl,
+        draw_text_clip(fm_win, tx, search_x + search_w - 8, bl,
                        cfg.col_title_fg_inactive, "Search");
     }
 }
@@ -710,221 +768,189 @@ static int fm_side_row_h(void)
 {
     int h = sc.font_height + 12;
 
-    return h < 26 ? 26 : h;
+    return h < 28 ? 28 : h;
 }
 
-/* Harbor places sidebar: quiet two-tone column, selected pill, hover */
+static void fm_draw_place_row(int i, int y)
+{
+    int rh = fm_side_row_h();
+    int selrow = place_selected(i);
+    int hov = hover_side == i;
+    int bl = y + (rh + sc.font_ascent - sc.font_descent) / 2;
+    const char *name = i < FM_FAV ? fav_names[i] : loc_names[0];
+
+    if (selrow)
+        ui_round_fill(fm_win, 8, y, list_x0 - 16, rh, 7, ui_accent());
+    else if (hov)
+        ui_round_fill(fm_win, 8, y, list_x0 - 16, rh, 7,
+                      ui_mix(cfg.col_panel_bg, 0xffffffUL, 10));
+    ui_draw_folder(fm_win, 14, y + (rh - 15) / 2, 15, 0);
+    draw_text_clip(fm_win, 38, list_x0 - 10, bl,
+                   selrow ? 0xffffffUL : cfg.col_menu_fg, name);
+}
+
 static void fm_draw_sidebar(void)
 {
     int rh = fm_side_row_h();
-    int y = list_y0 + 4;
+    int y = list_y0 + 10;
     int i;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_panel_bg, 0x000000UL, 9));
     XFillRectangle(sc.dpy, fm_win, sc.gc, 0, list_y0, (unsigned)list_x0,
                    (unsigned)(list_y1 - list_y0));
-    draw_text(fm_win, FM_PAD + 2, y + sc.font_ascent,
-              cfg.col_title_fg_inactive, "Places");
-    y += sc.font_height + 8;
-    for (i = 0; i < FM_PLACES; i++) {
-        int selrow = place_selected(i);
-        int hov = hover_side == i;
-        int bl = y + (rh + sc.font_ascent - sc.font_descent) / 2;
-
-        if (selrow) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, 4, y,
-                           (unsigned)(list_x0 - 8), (unsigned)rh);
-        } else if (hov) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, 4, y,
-                           (unsigned)(list_x0 - 8), (unsigned)rh);
-        }
-        /* folder tick */
-        XSetForeground(sc.dpy, sc.gc,
-                       selrow ? 0xedf0f5UL : C_FOLDER);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, FM_PAD + 4, bl - 8, 6, 2);
-        XFillRectangle(sc.dpy, fm_win, sc.gc, FM_PAD + 3, bl - 6, 12, 8);
-        draw_text_clip(fm_win, FM_PAD + 22, list_x0 - 8, bl,
-                       selrow ? 0xedf0f5UL : cfg.col_menu_fg,
-                       place_names[i]);
+    draw_text_small(fm_win, 16, y + sc.font_ascent,
+                    cfg.col_title_fg_inactive, "Favorites");
+    y += sc.font_height + 10;
+    side_fav_end = 0;
+    for (i = 0; i < FM_FAV; i++) {
+        fm_draw_place_row(i, y);
+        side_fav_end = i + 1;
         y += rh;
         if (y + rh > list_y1)
             break;
     }
-    /* separator between sidebar and list */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
+    side_loc_drawn = 0;
+    if (y + sc.font_height + 10 + rh <= list_y1) {
+        draw_text_small(fm_win, 16, y + sc.font_ascent,
+                        cfg.col_title_fg_inactive, "Locations");
+        y += sc.font_height + 10;
+        if (y + rh <= list_y1) {
+            fm_draw_place_row(FM_FAV, y);
+            side_loc_drawn = 1;
+        }
+    }
+    XSetForeground(sc.dpy, sc.gc,
+                   ui_mix(cfg.col_panel_bg, 0xffffffUL, 12));
     XDrawLine(sc.dpy, fm_win, sc.gc, list_x0, list_y0, list_x0, list_y1);
 }
 
 static void fm_draw_ctx(void)
 {
     int i, y;
-    int ih = sc.font_height + 8;
-    static const char *const names[5] = {
-        "Open", "Rename...", "Delete...", "Properties", "Set as wallpaper"
-    };
+    int ih = sc.font_height + 10;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, ctx_x, ctx_y, (unsigned)ctx_w,
-                   (unsigned)ctx_h);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, ctx_x + 1, ctx_y + 1,
-                   (unsigned)(ctx_w - 2), (unsigned)(ctx_h - 2));
+    ui_round_fill(fm_win, ctx_x, ctx_y, ctx_w, ctx_h, 9,
+                  ui_mix(cfg.col_menu_bg, 0x000000UL, 8));
+    ui_round_outline(fm_win, ctx_x, ctx_y, ctx_w, ctx_h, 9,
+                     ui_mix(cfg.col_menu_bg, 0xffffffUL, 20));
     for (i = 0; i < ctx_n; i++) {
-        y = ctx_y + 3 + i * ih;
-        if (i == ctx_idx) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, ctx_x + 2, y,
-                           (unsigned)(ctx_w - 4), (unsigned)ih);
-        }
+        y = ctx_y + 4 + i * ih;
+        if (i == ctx_idx)
+            ui_round_fill(fm_win, ctx_x + 4, y, ctx_w - 8, ih, 6,
+                          ui_accent());
         draw_text(fm_win, ctx_x + 12,
                   y + (ih + sc.font_ascent - sc.font_descent) / 2,
-                  cfg.col_menu_fg, names[ctx_ids[i]]);
+                  i == ctx_idx ? 0xffffffUL : cfg.col_menu_fg,
+                  ctx_names[i]);
     }
 }
 
 static void fm_draw(void)
 {
     int bl, i;
-    int rowh = fm_row_h();
     char buf[FM_PATH_MAX + 64];
+    int list_bg = (int)ui_mix(cfg.col_panel_bg, 0xffffffUL, 3);
 
     if (!fm_win || !fm_is_open)
         return;
 
-    /* Harbor/macOS title: calm close dot on the left, centred title */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, 0, 0, (unsigned)fw,
-                   (unsigned)FM_TITLE_H);
-    {
-        int d = 12, ox = 8, oy = (FM_TITLE_H - d) / 2;
+    ui_round_fill(fm_win, 0, 0, fw, fh, 12, cfg.col_panel_bg);
+    ui_round_fill_gradient(fm_win, 0, 0, fw, FM_TITLE_H, 12,
+                           ui_mix(cfg.col_title_bg, 0xffffffUL, 8),
+                           ui_mix(cfg.col_title_bg, 0x000000UL, 6));
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_title_bg, 0x000000UL, 34));
+    XDrawLine(sc.dpy, fm_win, sc.gc, 0, FM_TITLE_H - 1, fw, FM_TITLE_H - 1);
 
-        XSetForeground(sc.dpy, sc.gc, 0xc07a7aUL);
-        XFillArc(sc.dpy, fm_win, sc.gc, ox, oy, (unsigned)d, (unsigned)d, 0,
-                 360 * 64);
-        if (hover_close) {
-            XSetForeground(sc.dpy, sc.gc, 0xedf0f5UL);
-            XDrawArc(sc.dpy, fm_win, sc.gc, ox - 2, oy - 2, (unsigned)(d + 4),
-                     (unsigned)(d + 4), 0, 360 * 64);
-        }
-        XSetForeground(sc.dpy, sc.gc, cfg.col_title_bg);
-        XDrawLine(sc.dpy, fm_win, sc.gc, ox + 4, oy + 4, ox + 8, oy + 8);
-        XDrawLine(sc.dpy, fm_win, sc.gc, ox + 4, oy + 8, ox + 8, oy + 4);
-    }
+    ui_draw_traffic(fm_win, 14, FM_TITLE_H / 2, 1,
+                    hover_close >= 0 ? hover_close : -1, 0,
+                    cfg.col_title_bg);
     bl = (FM_TITLE_H + sc.font_ascent - sc.font_descent) / 2;
-    snprintf(buf, sizeof(buf), "Files  %s", cwd);
     {
-        int left = FM_TITLE_H + 4;
-        int avail = fw - FM_TITLE_H - 10 - left;
-        char shown[256];
+        int tw = text_width_bold("Files");
 
-        if (avail > 40) {
-            fit_text(shown, sizeof(shown), buf, avail);
-            draw_text(fm_win, left + (avail - text_width(shown)) / 2, bl,
-                      cfg.col_title_fg, shown);
-        }
+        draw_text_bold(fm_win, (fw - tw) / 2, bl, cfg.col_title_fg, "Files");
     }
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, 0, FM_TITLE_H - 1, (unsigned)fw, 1);
 
-    /* toolbar: buttons, path field, search field */
-    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
+    XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_panel_bg, 0x000000UL, 10));
     XFillRectangle(sc.dpy, fm_win, sc.gc, 0, FM_TITLE_H, (unsigned)fw,
                    (unsigned)FM_TOOL_H);
     for (i = 0; i < n_btn; i++)
         fm_draw_button(i, hover_btn == i);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-    XFillRectangle(sc.dpy, fm_win, sc.gc, tool_path_x,
-                   FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2,
-                   (unsigned)tool_path_w, (unsigned)(sc.font_height + 8));
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, fm_win, sc.gc, tool_path_x,
-                   FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2,
-                   (unsigned)(tool_path_w - 1),
-                   (unsigned)(sc.font_height + 7));
-    bl = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 8)) / 2 +
-         (sc.font_height + 8 + sc.font_ascent - sc.font_descent) / 2;
-    draw_text_clip(fm_win, tool_path_x + 6, tool_path_x + tool_path_w - 4,
-                   bl, cfg.col_menu_fg, cwd);
+
+    {
+        int by = FM_TITLE_H + (FM_TOOL_H - (sc.font_height + 12)) / 2;
+        int bh = sc.font_height + 12;
+
+        ui_round_fill(fm_win, tool_path_x, by, tool_path_w, bh, 9,
+                      ui_mix(cfg.col_panel_bg, 0xffffffUL, 7));
+        ui_round_outline(fm_win, tool_path_x, by, tool_path_w, bh, 9,
+                         ui_mix(cfg.col_panel_bg, 0xffffffUL, 16));
+        bl = by + (bh + sc.font_ascent - sc.font_descent) / 2;
+        draw_text_clip(fm_win, tool_path_x + 9, tool_path_x + tool_path_w - 6,
+                       bl, cfg.col_menu_fg, cwd);
+    }
     fm_draw_search();
 
-    /* sidebar + list */
-    fm_draw_sidebar();
-    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
+    XSetForeground(sc.dpy, sc.gc, (unsigned long)list_bg);
     XFillRectangle(sc.dpy, fm_win, sc.gc, list_x0, list_y0,
                    (unsigned)(list_w - list_x0),
                    (unsigned)(list_y1 - list_y0));
-    for (i = 0; i < rows; i++) {
-        int vrow = scroll + i;
-        int idx;
-        int y = list_y0 + i * rowh;
-        int baseline;
-        FmEntry *e;
-        char sz[32];
-        int type_x = list_w - 8 - 58;
-        int sz_right = type_x - 12;
-        int icon_x = list_x0 + 8;
-        int text_x = list_x0 + 32;
+    fm_draw_sidebar();
 
-        if (vrow >= n_vis)
-            break;
-        idx = vis_idx[vrow];
-        if (idx < 0 || idx >= n_ents)
-            continue;
-        e = &ents[idx];
-        if (idx == sel) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, list_x0, y,
-                           (unsigned)(list_w - list_x0), (unsigned)rowh);
-        } else if (idx == hover) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_btn_hover);
-            XFillRectangle(sc.dpy, fm_win, sc.gc, list_x0, y,
-                           (unsigned)(list_w - list_x0), (unsigned)rowh);
-        }
-        baseline = y + (rowh + sc.font_ascent - sc.font_descent) / 2;
-        fm_draw_icon(icon_x, baseline, e);
-        {
-            char shown[FM_NAME_MAX];
-            int maxw = sz_right - text_x - 42 - 32;
+    if (n_vis == 0) {
+        const char *msg = sbuf[0] ? "No matches" : "This folder is empty";
 
-            if (maxw < 40)
-                maxw = 40;
-            fit_text(shown, sizeof(shown), e->name, maxw);
-            draw_text(fm_win, text_x, baseline, cfg.col_menu_fg, shown);
-        }
-        if (e->is_dir) {
-            sz[0] = '\0';
-        } else {
-            fmt_size(sz, sizeof(sz), e->size);
-        }
-        if (sz[0]) {
-            int w = text_width(sz);
-
-            draw_text(fm_win, sz_right - w, baseline,
-                      idx == sel ? 0xe6ecf5UL : cfg.col_menu_fg, sz);
-        }
-        {
-            int w = text_width(kind_label(e));
-
-            draw_text(fm_win, list_w - 8 - w, baseline,
-                      idx == sel ? 0xe6ecf5UL : cfg.col_menu_fg,
-                      kind_label(e));
-        }
+        draw_text(fm_win, list_x0 + (list_w - list_x0 - text_width(msg)) / 2,
+                  list_rows_y0() + FM_CELL_H / 2 + sc.font_ascent / 2,
+                  cfg.col_title_fg_inactive, msg);
     }
-    if (sbuf[0] != '\0' && n_vis == 0)
-        draw_text(fm_win, list_x0 + 12,
-                  list_y0 + (rowh + sc.font_ascent - sc.font_descent) / 2,
-                  cfg.col_title_fg_inactive, "No matches");
+    for (i = 0; i < rows; i++) {
+        int v = scroll + i;
+        int col, row, cx, cy, ix, iy, tw, lx;
+        unsigned long cell_bg;
+        const FmEntry *e;
+        char shown[FM_NAME_MAX];
+        int selrow;
+
+        if (v >= n_vis)
+            break;
+        col = i % grid_cols;
+        row = i / grid_cols;
+        cx = list_x0 + FM_PAD + col * FM_CELL_W;
+        cy = list_rows_y0() + 4 + row * FM_CELL_H;
+        e = &ents[vis_idx[v]];
+        selrow = (vis_idx[v] == sel);
+
+        if (selrow)
+            cell_bg = ui_mix(ui_accent(), (unsigned long)list_bg, 62);
+        else if (vis_idx[v] == hover)
+            cell_bg = ui_mix((unsigned long)list_bg, 0xffffffUL, 9);
+        else
+            cell_bg = 0;
+        if (cell_bg)
+            ui_round_fill(fm_win, cx + 3, cy + 2, FM_CELL_W - 6,
+                          FM_CELL_H - 4, 8, cell_bg);
+
+        ix = cx + (FM_CELL_W - 42) / 2;
+        iy = cy + 9;
+        fm_draw_icon(ix, iy, 42, e);
+        fit_text(shown, sizeof(shown), e->name, FM_CELL_W - 10);
+        tw = text_width(shown);
+        lx = cx + (FM_CELL_W - tw) / 2;
+        if (lx < cx + 4)
+            lx = cx + 4;
+        draw_text_clip(fm_win, lx, cx + FM_CELL_W - 4,
+                       iy + 42 + 20,
+                       selrow ? 0xffffffUL : cfg.col_menu_fg, shown);
+    }
     fm_draw_scrollbar();
 
-    /* status bar / input line */
     {
         int sy = list_y1;
         int sh = fh - list_y1;
         int sbl = sy + (sh + sc.font_ascent - sc.font_descent) / 2;
 
-        XSetForeground(sc.dpy, sc.gc, cfg.col_panel_bg);
+        XSetForeground(sc.dpy, sc.gc, ui_mix(cfg.col_panel_bg, 0x000000UL, 6));
         XFillRectangle(sc.dpy, fm_win, sc.gc, 0, sy, (unsigned)fw,
                        (unsigned)sh);
         if (mode == FM_MODE_EDIT) {
@@ -932,12 +958,12 @@ static void fm_draw(void)
             int px = FM_PAD + text_width(pre);
             int cw;
 
-            draw_text(fm_win, FM_PAD, sbl, cfg.col_border_focus, pre);
+            draw_text(fm_win, FM_PAD, sbl, ui_accent(), pre);
             snprintf(buf, sizeof(buf), "%s", ibuf);
             draw_text_clip(fm_win, px, fw - FM_PAD - 4, sbl,
                            cfg.col_menu_fg, buf);
             cw = text_width(ibuf);
-            XSetForeground(sc.dpy, sc.gc, cfg.col_border_focus);
+            XSetForeground(sc.dpy, sc.gc, ui_accent());
             XFillRectangle(sc.dpy, fm_win, sc.gc, px + cw,
                            sbl - sc.font_ascent, 2,
                            (unsigned)(sc.font_ascent + sc.font_descent));
@@ -948,8 +974,13 @@ static void fm_draw(void)
                            cfg.col_close_hover, buf);
         } else {
             char sz[32];
+            unsigned long sfg = cfg.col_menu_fg;
 
-            if (n_ents == 0) {
+            if (cwd_unreadable) {
+                snprintf(buf, sizeof(buf),
+                         "Cannot read this folder (permission denied?)");
+                sfg = cfg.col_close_hover;
+            } else if (n_ents == 0) {
                 snprintf(buf, sizeof(buf), "Empty folder");
             } else if (sbuf[0] != '\0' && n_vis == 0) {
                 snprintf(buf, sizeof(buf), "%d items   |   no matches for '%s'",
@@ -976,14 +1007,23 @@ static void fm_draw(void)
             } else {
                 snprintf(buf, sizeof(buf), "%d items", n_ents);
             }
-            draw_text_clip(fm_win, FM_PAD, fw - 200, sbl, cfg.col_menu_fg,
-                           buf);
-            if (show_hidden) {
-                int w = text_width("hidden on (Ctrl+H)");
+            {
+                char fit[sizeof(buf)];
+                int tw, tx;
 
-                draw_text(fm_win, fw - FM_PAD - w, sbl,
-                          cfg.col_border_focus,
-                          "hidden on (Ctrl+H)");
+                fit_text(fit, sizeof(fit), buf, fw - 2 * FM_PAD - 170);
+                tw = text_width(fit);
+                tx = (fw - tw) / 2;
+                if (tx < FM_PAD)
+                    tx = FM_PAD;
+                draw_text_small(fm_win, tx, sbl, sfg, fit);
+            }
+            if (show_hidden) {
+                int w = text_width_small("hidden on (Ctrl+H)");
+
+                draw_text_small(fm_win, fw - FM_PAD - w, sbl,
+                                cfg.col_title_fg_inactive,
+                                "hidden on (Ctrl+H)");
             }
         }
     }
@@ -991,9 +1031,8 @@ static void fm_draw(void)
     if (mode == FM_MODE_CTX)
         fm_draw_ctx();
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, fm_win, sc.gc, 0, 0, (unsigned)fw - 1,
-                   (unsigned)fh - 1);
+    ui_round_outline(fm_win, 0, 0, fw, fh, 12,
+                     ui_mix(cfg.col_panel_bg, 0xffffffUL, 20));
 }
 
 /* ------------------------------------------------------------ actions -- */
@@ -1454,25 +1493,31 @@ static int fm_sb_click(int x, int y)
     return 1;
 }
 
-/* sidebar hit test: -1 when the pointer is not on a place row */
+/* sidebar hit test across both sections, or -1 off the rows.
+   Only rows that are actually drawn can be clicked. */
 static int fm_side_hit(int x, int y)
 {
     int rh = fm_side_row_h();
-    int top = list_y0 + 4 + sc.font_height + 8;
+    int top0 = list_y0 + 10 + sc.font_height + 10;
+    int end0 = top0 + side_fav_end * rh;
+    int top1 = top0 + FM_FAV * rh + sc.font_height + 10;
     int i;
 
-    if (x < 0 || x >= list_x0 || y < top || y >= list_y1)
+    if (x < 0 || x >= list_x0 || y < top0 || y >= list_y1)
         return -1;
-    i = (y - top) / rh;
-    if (i < 0 || i >= FM_PLACES)
-        return -1;
-    return i;
+    if (y < end0) {
+        i = (y - top0) / rh;
+        return i >= 0 && i < side_fav_end ? i : -1;
+    }
+    if (y < top1 || !side_loc_drawn)
+        return -1;                          /* Locations header gap */
+    return (y - top1) / rh == 0 ? FM_FAV : -1;  /* Computer */
 }
 
 int fm_button(XButtonEvent *ev)
 {
     int in_fm;
-    int y, i;
+    int i;
 
     if (!fm_win)
         return 0;
@@ -1505,12 +1550,19 @@ int fm_button(XButtonEvent *ev)
             return 1;
     }
 
-    /* title bar close (left dot, macOS style) */
-    if (ev->y < FM_TITLE_H && ev->x < FM_TITLE_H) {
-        fm_close();
-        return 1;
-    }
     if (ev->y < FM_TITLE_H) {
+        int left = 8;
+        int cell = 21;
+
+        if (ev->x >= left && ev->x < left + 3 * cell) {
+            int light = (ev->x - left) / cell;
+
+            if (light == UI_LIGHT_CLOSE)
+                fm_close();
+            else if (light == UI_LIGHT_MIN)
+                fm_hide();
+            return 1;
+        }
         if (ev->button == Button1)   /* title bar drags the window */
             selfdrag_window(fm_win, ev, &fx, &fy, fw, fh);
         return 1;
@@ -1541,33 +1593,11 @@ int fm_button(XButtonEvent *ev)
             fm_cd_parent();
             fm_draw();
         } else if (id == BTN_BACK) {
-            if (n_hist > 0) {
-                char back[FM_PATH_MAX];
-
-                str_copy(back, sizeof(back), hist[--n_hist]);
-                hist[n_hist][0] = '\0';
-                {
-                    char *r = realpath(back, NULL);
-
-                    if (r) {
-                        str_copy(cwd, sizeof(cwd), r);
-                        free(r);
-                        sbuf[0] = '\0';
-                        search_focus = 0;
-                        fm_reload();
-                        sel = scroll = 0;
-                        if (n_vis > 0)
-                            sel = vis_idx[0];
-                        fm_set_name();
-                        fm_draw();
-                    }
-                }
-            }
-        } else if (id == BTN_HOME) {
-            const char *home = getenv("HOME");
-
-            if (fm_cd(home && *home ? home : "/"))
-                fm_draw();
+            fm_go_back();
+            fm_draw();
+        } else if (id == BTN_FWD) {
+            fm_go_forward();
+            fm_draw();
         } else if (id == BTN_NEW) {
             ibuf[0] = '\0';
             edit_what = 1;
@@ -1589,7 +1619,7 @@ int fm_button(XButtonEvent *ev)
             ev->x >= list_x0) {
             int vsel = fm_vis_row_of_sel();
 
-            scroll += (ev->button == Button4) ? -3 : 3;
+            scroll += (ev->button == Button4) ? -grid_cols : grid_cols;
             if (scroll > span - rows)
                 scroll = span - rows;
             if (scroll < 0)
@@ -1631,14 +1661,12 @@ int fm_button(XButtonEvent *ev)
         return 1;
     }
 
-    /* list rows */
+    /* icon grid */
     if (ev->y >= list_y0 && ev->y < list_y1 && ev->x < list_w) {
-        int vrow;
+        int vrow = fm_grid_index_at(ev->x, ev->y);
         int eidx;
 
-        y = ev->y - list_y0;
-        vrow = scroll + y / fm_row_h();
-        if (vrow < 0 || vrow >= n_vis)
+        if (vrow < 0)
             return 1;
         eidx = vis_idx[vrow];
         if (ev->button == Button3) {
@@ -1685,8 +1713,8 @@ int fm_motion(XMotionEvent *ev)
     x = ev->x;
     y = ev->y;
 
-    if (y < FM_TITLE_H && x < FM_TITLE_H)
-        nc = 1;
+    if (y < FM_TITLE_H && x >= 8 && x < 8 + 3 * 21)
+        nc = (x - 8) / 21;
     if (y >= FM_TITLE_H && y < FM_TITLE_H + FM_TOOL_H) {
         int i;
 
@@ -1701,10 +1729,10 @@ int fm_motion(XMotionEvent *ev)
     } else if (y >= list_y0 && y < list_y1) {
         if (x < list_x0) {
             ns = fm_side_hit(x, y);
-        } else if (x < list_w) {
-            int vrow = scroll + (y - list_y0) / fm_row_h();
+        } else if (x < list_w && y >= list_rows_y0()) {
+            int vrow = fm_grid_index_at(x, y);
 
-            if (vrow >= 0 && vrow < n_vis)
+            if (vrow >= 0)
                 nr = vis_idx[vrow];
         }
     }
@@ -1882,11 +1910,11 @@ void fm_key(XKeyEvent *ev)
         fm_draw();
         break;
     case XK_Up:
-        fm_select(fm_vis_row_of_sel() - 1);
+        fm_select(fm_vis_row_of_sel() - grid_cols);
         fm_draw();
         break;
     case XK_Down:
-        fm_select(fm_vis_row_of_sel() + 1);
+        fm_select(fm_vis_row_of_sel() + grid_cols);
         fm_draw();
         break;
     case XK_Prior:
@@ -1939,6 +1967,20 @@ void fm_key(XKeyEvent *ev)
             fm_select_ent(sel);
             fm_draw();
         }
+        break;
+    case XK_Left:
+        if (mod == ControlMask)         /* back through the history */
+            fm_go_back();
+        else
+            fm_select(fm_vis_row_of_sel() - 1);
+        fm_draw();
+        break;
+    case XK_Right:
+        if (mod == ControlMask)         /* forward through the history */
+            fm_go_forward();
+        else
+            fm_select(fm_vis_row_of_sel() + 1);
+        fm_draw();
         break;
     default:
         break;

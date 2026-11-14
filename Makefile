@@ -45,8 +45,8 @@ HALDIR    = hal
 # hard limit for the Xvfb suite so `make test` can never hang
 TEST_TIMEOUT ?= 300
 
-SRC = src/main.c src/util.c src/config.c src/wm.c src/input.c \
-      src/panel.c src/launcher.c src/apps.c src/msgbox.c src/fm.c \
+SRC = src/main.c src/util.c src/ui.c src/config.c src/wm.c src/input.c \
+      src/panel.c src/dock.c src/launcher.c src/apps.c src/msgbox.c src/fm.c \
       src/desktop.c src/security_gui.c src/taskbar.c
 OBJ = $(patsubst %.c,$(OBJDIR)/%.o,$(SRC))
 

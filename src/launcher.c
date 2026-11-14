@@ -8,22 +8,24 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MENU_PAD       6
-#define MENU_MAX_W     400
-#define MENU_MIN_W     200
+#define MENU_PAD       8
+#define MENU_MAX_W     420
+#define MENU_MIN_W     210
 #define MENU_MAX_ROWS  18
 #define CMD_W          520
 #define SEP_LABEL      "-"
 
 /* searchable launcher (Alt+Space) layout */
-#define LAUNCH_W       384       /* compact, fixed width */
-#define LAUNCH_HEAD    36        /* search field row */
+#define LAUNCH_W       420       /* compact, fixed width */
+#define LAUNCH_HEAD    44        /* search field row */
 #define LAUNCH_SEP     1         /* rule under the field */
-#define LAUNCH_TEXT_X  40        /* shared text column (icon + field) */
+#define LAUNCH_TEXT_X  44        /* shared text column (icon + field) */
 #define LAUNCH_ICON_X  12
 #define LAUNCH_ROW_X   6
-#define FIELD_H        24        /* height of every text field */
+#define FIELD_H        28        /* height of every text field */
 #define FIELD_PAD      10        /* field inset from the window edge */
+#define MENU_RADIUS    12
+#define ROW_RADIUS     7
 #define ROW_MIN_H      26
 #define LAUNCH_MIN_ROWS 1        /* shrink to the number of results */
 
@@ -269,14 +271,14 @@ static void menu_geometry(void)
     if (menu_search) {
         int avail, maxr;
 
-        menu_icon = sc.font_height + 5;
-        if (menu_icon < 18)
-            menu_icon = 18;
-        menu_item_h = sc.font_height + 12;
-        if (menu_item_h < menu_icon + 8)
-            menu_item_h = menu_icon + 8;
-        if (menu_item_h < ROW_MIN_H)
-            menu_item_h = ROW_MIN_H;
+        menu_icon = sc.font_height + 6;
+        if (menu_icon < 20)
+            menu_icon = 20;
+        menu_item_h = sc.font_height + 16;
+        if (menu_item_h < menu_icon + 10)
+            menu_item_h = menu_icon + 10;
+        if (menu_item_h < 30)
+            menu_item_h = 30;
 
         menu_mw = LAUNCH_W;
         if (menu_mw > sc.sw - 8)
@@ -299,8 +301,7 @@ static void menu_geometry(void)
         menu_mh = LAUNCH_HEAD + LAUNCH_SEP + rows * menu_item_h;
 
         menu_mx = (sc.sw - menu_mw) / 2;
-        menu_my = cfg.panel_top ? cfg.panel_height + 12
-                                : sc.sh - cfg.panel_height - menu_mh - 12;
+        menu_my = reserve_top() + 12;      /* below the menu bar */
         if (menu_my < 0)
             menu_my = 0;
         if (menu_mx < 0)
@@ -309,8 +310,8 @@ static void menu_geometry(void)
         if (menu_anchor_y >= 0) {
             menu_mx = menu_anchor_x;
             menu_my = menu_anchor_y;
-            if (menu_my + menu_mh > sc.sh - cfg.panel_height - 4)
-                menu_my = sc.sh - cfg.panel_height - menu_mh - 4;
+            if (menu_my + menu_mh > sc.sh - reserve_bottom() - 4)
+                menu_my = sc.sh - reserve_bottom() - menu_mh - 4;
             if (menu_my < 0)
                 menu_my = 0;
         }
@@ -326,9 +327,9 @@ static void menu_geometry(void)
         if (w > maxw)
             maxw = w;
     }
-    menu_item_h = sc.font_height + 10;
-    if (menu_item_h < 22)
-        menu_item_h = 22;
+    menu_item_h = sc.font_height + 12;
+    if (menu_item_h < 26)
+        menu_item_h = 26;
 
     menu_mw = maxw;
     if (menu_mw < MENU_MIN_W)
@@ -347,21 +348,19 @@ static void menu_geometry(void)
     menu_mh = rows * menu_item_h + 2 * MENU_PAD;
 
     if (menu_desktop && menu_mx >= 0) {
-        /* anchored at the pointer, flipped if it would leave the screen */
+        /* anchored at the pointer, flipped up if it would run under
+           the dock */
         if (menu_mx + menu_mw > sc.sw - 4)
             menu_mx = sc.sw - menu_mw - 4;
-        if (menu_my + menu_mh > sc.sh - cfg.panel_height - 4)
-            menu_my -= menu_mh + cfg.panel_height;
-        if (menu_my < 4)
-            menu_my = 4;
+        if (menu_my + menu_mh > sc.sh - reserve_bottom() - 4)
+            menu_my = sc.sh - reserve_bottom() - 4 - menu_mh;
+        if (menu_my < reserve_top() + 4)
+            menu_my = reserve_top() + 4;
         if (menu_mx < 4)
             menu_mx = 4;
     } else {
         menu_mx = 4;
-        if (cfg.panel_top)
-            menu_my = cfg.panel_height + 4;
-        else
-            menu_my = sc.sh - cfg.panel_height - menu_mh - 4;
+        menu_my = reserve_top() + 4;
         if (menu_my < 0)
             menu_my = 0;
     }
@@ -377,7 +376,7 @@ static void menu_create_window(void)
         wa.event_mask = ExposureMask | ButtonPressMask | PointerMotionMask |
                         EnterWindowMask;
         sc.menu = XCreateWindow(sc.dpy, sc.root, menu_mx, menu_my,
-                                (unsigned)menu_mw, (unsigned)menu_mh, 1,
+                                (unsigned)menu_mw, (unsigned)menu_mh, 0,
                                 CopyFromParent, InputOutput, CopyFromParent,
                                 CWOverrideRedirect | CWBackPixel | CWEventMask,
                                 &wa);
@@ -386,6 +385,7 @@ static void menu_create_window(void)
         XMoveResizeWindow(sc.dpy, sc.menu, menu_mx, menu_my,
                           (unsigned)menu_mw, (unsigned)menu_mh);
     }
+    ui_shape_round(sc.menu, menu_mw, menu_mh, MENU_RADIUS);
 }
 
 static void menu_open_common(int desktop, MenuEntry *src, int n)
@@ -485,23 +485,18 @@ void menu_hide(void)
 
 /* ------------------------------------------------------------ drawing --- */
 
-/* inset text field: quiet background, hairline border, optional lens */
+/* inset text field: quiet rounded fill, hairline, optional lens */
 static void draw_field(Window w, int x, int y, int fw, int fh, int lens)
 {
-    unsigned long bg = mix_color(cfg.col_menu_bg, 0xffffffUL, 7);
-    int cx = x + 12, cy = y + fh / 2;
+    unsigned long bg = mix_color(cfg.col_menu_bg, 0xffffffUL, 9);
 
-    XSetForeground(sc.dpy, sc.gc, bg);
-    XFillRectangle(sc.dpy, w, sc.gc, x, y, (unsigned)fw, (unsigned)fh);
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, w, sc.gc, x, y, (unsigned)(fw - 1),
-                   (unsigned)(fh - 1));
+    ui_round_fill(w, x, y, fw, fh, 8, bg);
+    ui_round_outline(w, x, y, fw, fh, 8,
+                     mix_color(cfg.col_menu_bg, 0xffffffUL, 18));
     if (!lens)
         return;
-    XSetForeground(sc.dpy, sc.gc,
+    ui_draw_magnifier(w, x + 12, y + 4, fh - 8,
                    mix_color(cfg.col_menu_fg, cfg.col_menu_bg, 45));
-    XDrawArc(sc.dpy, w, sc.gc, cx - 5, cy - 5, 9, 9, 0, 360 * 64);
-    XDrawLine(sc.dpy, w, sc.gc, cx + 3, cy + 3, cx + 7, cy + 7);
 }
 
 /* classic menu rows: separator, selection, run chevron */
@@ -521,25 +516,28 @@ static void menu_draw_plain(void)
         bl = y0 + (menu_item_h + sc.font_ascent - sc.font_descent) / 2;
 
         if (is_sep(e)) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_btn_inactive);
-            XDrawLine(sc.dpy, sc.menu, sc.gc, 8, y0 + menu_item_h / 2,
-                      menu_mw - 8, y0 + menu_item_h / 2);
+            XSetForeground(sc.dpy, sc.gc,
+                           mix_color(cfg.col_menu_bg, cfg.col_menu_fg, 16));
+            XDrawLine(sc.dpy, sc.menu, sc.gc, 14, y0 + menu_item_h / 2,
+                      menu_mw - 14, y0 + menu_item_h / 2);
             continue;
         }
 
         if (i == menu_sel) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
-            XFillRectangle(sc.dpy, sc.menu, sc.gc, 2, y0,
-                           (unsigned)(menu_mw - 4), (unsigned)menu_item_h);
+            ui_round_fill(sc.menu, 4, y0 + 1, menu_mw - 8, menu_item_h - 2,
+                          ROW_RADIUS, cfg.col_menu_sel);
         }
         fg = (i == menu_sel) ? 0xffffffUL : cfg.col_menu_fg;
-        draw_text_clip(sc.menu, 16, menu_mw - 12, bl, fg, e->label);
-        /* small "run" arrow on the right */
-        XSetForeground(sc.dpy, sc.gc, fg);
-        XDrawLine(sc.dpy, sc.menu, sc.gc, menu_mw - 16, bl - 5,
-                  menu_mw - 12, bl);
-        XDrawLine(sc.dpy, sc.menu, sc.gc, menu_mw - 12, bl,
-                  menu_mw - 16, bl + 5);
+        draw_text_clip(sc.menu, 15, menu_mw - 12, bl, fg, e->label);
+        /* small "run" arrow on the right - but only for commands that
+           actually launch something, never for in-place window actions */
+        if (strncmp(e->cmd, "@wm-", 4) != 0) {
+            XSetForeground(sc.dpy, sc.gc, fg);
+            XDrawLine(sc.dpy, sc.menu, sc.gc, menu_mw - 16, bl - 5,
+                      menu_mw - 12, bl);
+            XDrawLine(sc.dpy, sc.menu, sc.gc, menu_mw - 12, bl,
+                      menu_mw - 16, bl + 5);
+        }
     }
 }
 
@@ -565,7 +563,7 @@ static void menu_draw_launch(void)
         XFillRectangle(sc.dpy, sc.menu, sc.gc, cx, bl - sc.font_ascent, 1,
                        (unsigned)(sc.font_ascent + sc.font_descent));
     } else {
-        draw_text(sc.menu, LAUNCH_TEXT_X, bl, dim, "Type to search...");
+        draw_text(sc.menu, LAUNCH_TEXT_X, bl, dim, "Spotlight Search");
     }
 
     XSetForeground(sc.dpy, sc.gc,
@@ -599,10 +597,9 @@ static void menu_draw_launch(void)
         }
 
         if (i == menu_sel) {
-            XSetForeground(sc.dpy, sc.gc, cfg.col_menu_sel);
-            XFillRectangle(sc.dpy, sc.menu, sc.gc, LAUNCH_ROW_X, y0 + 1,
-                           (unsigned)(menu_mw - 2 * LAUNCH_ROW_X),
-                           (unsigned)(menu_item_h - 2));
+            ui_round_fill(sc.menu, LAUNCH_ROW_X, y0 + 1,
+                          menu_mw - 2 * LAUNCH_ROW_X, menu_item_h - 2,
+                          ROW_RADIUS, cfg.col_menu_sel);
         }
 
         {
@@ -610,9 +607,14 @@ static void menu_draw_launch(void)
             int iy = y0 + (menu_item_h - menu_icon) / 2;
 
             tile_glyph(e->label, g, sizeof(g));
-            XSetForeground(sc.dpy, sc.gc, tile_color(e->label));
-            XFillRectangle(sc.dpy, sc.menu, sc.gc, LAUNCH_ICON_X, iy,
-                           (unsigned)menu_icon, (unsigned)menu_icon);
+            {
+                unsigned long base = tile_color(e->label);
+
+                ui_round_fill_gradient(sc.menu, LAUNCH_ICON_X, iy, menu_icon,
+                                       menu_icon, 6,
+                                       mix_color(base, 0xffffffUL, 20),
+                                       mix_color(base, 0x000000UL, 18));
+            }
             if (g[0] != '\0') {
                 int gw = text_width(g);
                 int gbl = iy + (menu_icon + sc.font_ascent -
@@ -634,9 +636,8 @@ static void menu_draw(void)
     if (!sc.menu || !menu_open)
         return;
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_menu_bg);
-    XFillRectangle(sc.dpy, sc.menu, sc.gc, 0, 0, (unsigned)menu_mw,
-                   (unsigned)menu_mh);
+    ui_round_fill(sc.menu, 0, 0, menu_mw, menu_mh, MENU_RADIUS,
+                  cfg.col_menu_bg);
 
     if (menu_search)
         menu_draw_launch();
@@ -654,10 +655,8 @@ static void menu_draw(void)
                 th = 12;
             ty = row_top() + 3 +
                  (track - th) * menu_scroll / (menu_vis - menu_rows);
-            XSetForeground(sc.dpy, sc.gc,
-                           mix_color(cfg.col_menu_bg, cfg.col_menu_fg, 30));
-            XFillRectangle(sc.dpy, sc.menu, sc.gc, menu_mw - 5, ty, 3,
-                           (unsigned)th);
+            ui_round_fill(sc.menu, menu_mw - 6, ty, 3, th, 2,
+                          mix_color(cfg.col_menu_bg, cfg.col_menu_fg, 30));
         }
     } else if (menu_scroll > 0 || menu_scroll + menu_rows < menu_vis) {
         XSetForeground(sc.dpy, sc.gc, cfg.col_panel_fg);
@@ -668,12 +667,38 @@ static void menu_draw(void)
                       menu_mw - 4, menu_mh - 2);
     }
 
-    XSetForeground(sc.dpy, sc.gc, cfg.col_border_unfocus);
-    XDrawRectangle(sc.dpy, sc.menu, sc.gc, 0, 0, (unsigned)(menu_mw - 1),
-                   (unsigned)(menu_mh - 1));
+    ui_round_outline(sc.menu, 0, 0, menu_mw, menu_mh, MENU_RADIUS,
+                     mix_color(cfg.col_menu_bg, 0xffffffUL, 20));
 }
 
 /* ------------------------------------------------------------ actions --- */
+
+/* menu bar windows: about / shortcuts (bounded text, msgbox wraps it) */
+static void wm_about(int scde_only)
+{
+    char text[512];
+    const char *t = taskbar_active_title();
+
+    if (scde_only || !t || !*t)
+        snprintf(text, sizeof(text),
+                 "SCDE %s - Solo Coding Desktop Environment\n\n"
+                 "A lightweight C + X11 desktop.\n"
+                 "One process, no compositor, no toolkits.",
+                 SCDE_VERSION);
+    else
+        snprintf(text, sizeof(text), "About %s\n\nrunning under SCDE %s",
+                 t, SCDE_VERSION);
+    msgbox_show("About", text);
+}
+
+static void wm_about_keys(void)
+{
+    msgbox_show("Keyboard Shortcuts",
+                "Alt+F4 close   Alt+Up maximize   Alt+Down minimize\n"
+                "Alt+Tab switch   Alt+Left/Right snap halves\n"
+                "Alt+F2 run   Alt+Space menu   Alt+Enter terminal\n"
+                "Alt+E files   Alt+S security   Alt+D show desktop");
+}
 
 static void menu_activate(int index)
 {
@@ -705,6 +730,19 @@ static void menu_activate(int index)
             security_gui_toggle();
         else if (strcmp(e.cmd, "@logout") == 0)
             sc.running = 0;
+        else if (strcmp(e.cmd, "@wm-desktop") == 0)
+            show_desktop_toggle();
+        else if (strcmp(e.cmd, "@wm-hide") == 0)
+            active_minimize();
+        else if (strcmp(e.cmd, "@wm-close") == 0)
+            active_close();
+        else if (strcmp(e.cmd, "@wm-about") == 0 ||
+                 strcmp(e.cmd, "@wm-about-scde") == 0)
+            wm_about(strcmp(e.cmd, "@wm-about-scde") == 0);
+        else if (strcmp(e.cmd, "@wm-keys") == 0)
+            wm_about_keys();
+        else if (strncmp(e.cmd, "@wm-focus ", 10) == 0)
+            taskbar_activate(atoi(e.cmd + 10));
         else
             desktop_command(e.cmd);     /* desktop / shortcut actions */
         return;
@@ -909,8 +947,7 @@ void cmd_show(void)
     if (cmd_h < 40)
         cmd_h = 40;
     cmd_x = (sc.sw - cmd_w) / 2;
-    cmd_y = cfg.panel_top ? cfg.panel_height + 18
-                          : sc.sh - cfg.panel_height - cmd_h - 24;
+    cmd_y = reserve_top() + 18;         /* below the menu bar */
     if (cmd_y < 0)
         cmd_y = 0;
     cmd_buf[0] = '\0';

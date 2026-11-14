@@ -202,9 +202,8 @@ void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
                 if (c->x != ox || c->y != oy)
                     desktop_damage(ox, oy, ow, oh);  /* icons under it */
             } else {
-                int ph = panel_reserved();
-                int max_bottom = sc.sh - ph;
-                int top_limit = cfg.panel_top ? ph : 0;
+                int max_bottom = sc.sh - reserve_bottom();
+                int top_limit = reserve_top();
 
                 nw = w0;
                 nh = h0;
@@ -283,6 +282,9 @@ void start_drag(Client *c, XButtonEvent *ev, int mode, int dirflags)
             else if (e.type == MotionNotify &&
                      e.xmotion.window == sc.panel)
                 panel_motion(&e.xmotion);
+            else if (e.type == MotionNotify &&
+                     e.xmotion.window == sc.dock)
+                dock_motion(&e.xmotion);
             else if (e.type == MotionNotify && e.xmotion.window == sc.menu)
                 menu_motion(&e.xmotion);
             else if (e.type == PropertyNotify)
@@ -342,10 +344,10 @@ void selfdrag_window(Window win, XButtonEvent *ev, int *x, int *y,
                 nx = -lim;
             if (nx > sc.sw - 64)
                 nx = sc.sw - 64;
-            if (ny < 0)
-                ny = 0;
-            if (ny > sc.sh - 32)
-                ny = sc.sh - 32;
+            if (ny < reserve_top())
+                ny = reserve_top();
+            if (ny > sc.sh - reserve_bottom() - 32)
+                ny = sc.sh - reserve_bottom() - 32;
             if (nx != *x || ny != *y) {
                 XMoveWindow(sc.dpy, win, nx, ny);
                 desktop_damage(*x, *y, w, h);    /* area it just left */
@@ -386,22 +388,6 @@ void selfdrag_window(Window win, XButtonEvent *ev, int *x, int *y,
 
 /* ------------------------------------------------------------------ keys */
 
-/*
- * The X server's real input focus.  Grabbed Alt+chords arrive with
- * ev->window == root (the grab window), so dispatching close/minimise by
- * ev->window would always miss; the tracked sc.focus_win can go stale when
- * an external tool moves focus.  One round trip, only on key handling.
- */
-static Window current_focus(void)
-{
-    Window f = None;
-    int revert = RevertToNone;
-
-    if (sc.dpy)
-        XGetInputFocus(sc.dpy, &f, &revert);
-    return f;
-}
-
 void handle_key_press(XKeyEvent *ev)
 {
     KeySym sym = XLookupKeysym(ev, 0);
@@ -437,19 +423,9 @@ void handle_key_press(XKeyEvent *ev)
 
     switch (sym) {
     case XK_F4:
-        /* internal application windows close like managed ones */
-        {
-            Window fw = current_focus();
-
-            if ((fw == fm_window() || ev->window == fm_window()) && fm_open())
-                fm_close();
-            else if ((fw == security_gui_window() ||
-                      ev->window == security_gui_window()) &&
-                     security_gui_open())
-                security_gui_close();
-            else
-                close_client(sc.focused);
-        }
+        /* shared with the menu bar "Close" command: internal application
+           windows close like managed ones */
+        active_close();
         break;
     case XK_F2:
         cmd_show();
@@ -475,25 +451,9 @@ void handle_key_press(XKeyEvent *ev)
             client_maximize(c, !c->maximized);
         break;
     case XK_Down:
-        /* internal windows minimise to their taskbar entry */
-        {
-            Window fw = current_focus();
-
-            if ((fw == fm_window() || ev->window == fm_window()) &&
-                fm_open()) {
-                fm_hide();
-                break;
-            }
-            if ((fw == security_gui_window() ||
-                 ev->window == security_gui_window()) &&
-                security_gui_open()) {
-                security_gui_hide();
-                break;
-            }
-        }
-        c = sc.focused;
-        if (c)
-            client_minimize(c, c->minimized ? 0 : 1);
+        /* shared with the menu bar "Hide" command: internal windows
+           minimise to their dock entry */
+        active_minimize();
         break;
     case XK_Left:
         if (sc.focused)
@@ -534,6 +494,10 @@ void handle_button_press(XButtonEvent *ev)
 
     if (ev->window == sc.panel) {
         panel_button_press(ev);
+        return;
+    }
+    if (ev->window == sc.dock) {
+        dock_button_press(ev);
         return;
     }
     if (menu_is_open() && ev->window == sc.menu) {

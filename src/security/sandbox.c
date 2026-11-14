@@ -19,6 +19,7 @@
  */
 #define _DEFAULT_SOURCE
 #include <scde/security.h>
+#include <scde/security_resource.h>
 
 #include "security_internal.h"
 
@@ -693,9 +694,15 @@ static int hide_sensitive_paths(void)
 
 /* ------------------------------------------------------ sandbox apply -- */
 
-static void apply_rlimits(int full)
+/* Absolute ceiling for any sandbox: 3 GiB per sandboxed process
+ * (3072 MiB).  A configured value above this is clamped down to it,
+ * never raised past it; a zero (unset) ceiling fails closed below. */
+#define SCDE_SANDBOX_RAM_CAP_BYTES (3072ULL * 1024ULL * 1024ULL)
+
+static int apply_rlimits(int full)
 {
     struct rlimit rl;
+    scde_resource_limits_t res;
 
     rl.rlim_cur = 0;
     rl.rlim_max = 0;
@@ -715,32 +722,33 @@ static void apply_rlimits(int full)
                                      : (rlim_t)(1024 * 1024 * 1024);
     setrlimit(RLIMIT_FSIZE, &rl);
 
-    /* RAM + CPU: kernel-enforced where the platform allows.
-     * Best effort here (the dedicated resource module is authoritative
-     * and fail-closed); a refusal here must not silently widen limits. */
-    {
-        struct rlimit current;
+    /* Resource ceiling - shared with the resource module (one source of
+     * truth: scde_resource_defaults/set, wired to sandbox_memory_mb).
+     * Scope: per sandboxed process (RLIMIT_AS address space), enforced by
+     * the kernel in the child before exec.  Cap only: an existing stricter
+     * hard limit is kept, never raised.  A failure here fails the sandbox
+     * closed - we never claim a ceiling we did not apply.
+     *
+     * No CPU quota: SCDE deliberately imposes none.  Sandboxed
+     * applications use whatever CPU the host scheduler gives them. */
+    scde_resource_get(&res);
+    if (res.ram_bytes > 0) {
+        rlim_t cap = (rlim_t)res.ram_bytes;
+        struct rlimit as;
 
-        rl.rlim_cur = rl.rlim_max =
-            full ? (rlim_t)(512 * 1024 * 1024) : (rlim_t)(1024UL * 1024UL * 1024UL);
-#ifdef RLIMIT_AS
-        if (getrlimit(RLIMIT_AS, &current) == 0) {
-            if (current.rlim_cur == RLIM_INFINITY ||
-                current.rlim_cur > rl.rlim_cur)
-                setrlimit(RLIMIT_AS, &rl);
-        } else {
-            setrlimit(RLIMIT_AS, &rl);
-        }
-#endif
-        rl.rlim_cur = rl.rlim_max = full ? (rlim_t)30 : (rlim_t)120;
-        if (getrlimit(RLIMIT_CPU, &current) == 0) {
-            if (current.rlim_cur == RLIM_INFINITY ||
-                current.rlim_cur > rl.rlim_cur)
-                setrlimit(RLIMIT_CPU, &rl);
-        } else {
-            setrlimit(RLIMIT_CPU, &rl);
-        }
+        if (cap > (rlim_t)SCDE_SANDBOX_RAM_CAP_BYTES)
+            cap = (rlim_t)SCDE_SANDBOX_RAM_CAP_BYTES;
+        if (getrlimit(RLIMIT_AS, &as) != 0)
+            return -1;
+        if (as.rlim_max == RLIM_INFINITY || as.rlim_max > cap)
+            as.rlim_max = cap;
+        as.rlim_cur = as.rlim_max;
+        if (setrlimit(RLIMIT_AS, &as) != 0)
+            return -1;
+    } else {
+        return -1;                    /* no ceiling configured: fail closed */
     }
+    return 0;
 }
 
 int scde_sandbox_apply(scde_sandbox_tier_t tier)
@@ -759,7 +767,9 @@ int scde_sandbox_apply(scde_sandbox_tier_t tier)
         return SCDE_ERR;
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
         return SCDE_ERR;
-    apply_rlimits(tier == SCDE_SANDBOX_FULL);
+    /* resource ceiling is load-bearing: fail closed when it cannot hold */
+    if (apply_rlimits(tier == SCDE_SANDBOX_FULL) != 0)
+        return SCDE_ERR;
 
     if (tier == SCDE_SANDBOX_FULL) {
         /* seccomp is REQUIRED for the sandbox tier: fail closed */
