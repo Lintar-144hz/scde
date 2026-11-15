@@ -27,9 +27,11 @@ void scde_resource_defaults(scde_resource_limits_t *out)
 {
     if (!out)
         return;
-    /* 3 GiB sandbox ceiling per sandboxed process (RLIMIT_AS address
-     * space, kernel-enforced in the child before exec).  SCDE imposes no
-     * CPU quota of its own (cpu_seconds = 0: the host scheduler decides). */
+    /* 3 GiB sandbox ceiling per sandboxed process (RLIMIT_DATA, kernel-
+     * enforced in the child before exec).  RLIMIT_DATA is used instead of
+     * RLIMIT_AS because modern browsers reserve far more virtual address
+     * space than they ever commit as RAM.  SCDE imposes no CPU quota of
+     * its own (cpu_seconds = 0: the host scheduler decides). */
     out->ram_bytes = 3072ul * 1024ul * 1024ul;   /* 3072 MiB = 3 GiB */
     out->cpu_seconds = 0;                         /* no SCDE CPU quota */
     out->nproc = 64;                             /* child processes */
@@ -121,7 +123,10 @@ int scde_resource_apply(void)
             failures++;
     }
     if (lim.ram_bytes > 0) {
-#ifdef RLIMIT_AS
+#ifdef RLIMIT_DATA
+        if (cap_rlimit(RLIMIT_DATA, (rlim_t)lim.ram_bytes) != 0)
+            failures++;
+#elif defined(RLIMIT_AS)
         if (cap_rlimit(RLIMIT_AS, (rlim_t)lim.ram_bytes) != 0)
             failures++;
 #else

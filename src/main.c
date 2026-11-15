@@ -291,7 +291,6 @@ static void setup_root(void)
         char dpy_name[256];
         str_copy(dpy_name, sizeof(dpy_name), DisplayString(sc.dpy));
         close(sc.lock_fd);
-        unlink(sc.lock_path);
         XCloseDisplay(sc.dpy);
         sc.dpy = NULL;
         die("another window manager is already running on display %s",
@@ -380,27 +379,43 @@ static void dispatch(XEvent *ev)
 
 static void event_loop(void)
 {
+    enum { X_EVENT_BATCH = 32 };
+
     while (sc.running) {
+        if (scde_security_pending()) {
+            scde_security_pump();
+
+            if (scde_bait_enabled())
+                scde_bait_check();
+
+            security_gui_redraw();
+        }
+
         struct pollfd pfds[2];
         int np = 1;
         int wfd;
         int timeout;
         int rc;
+        int processed = 0;
 
-        scde_event_dispatch();          /* deliver App API events */
+        scde_event_dispatch();
 
-        if (XPending(sc.dpy) > 0) {
+        /* Process a bounded batch so other services cannot starve. */
+        while (processed < X_EVENT_BATCH && XPending(sc.dpy) > 0) {
             XEvent ev;
+
             XNextEvent(sc.dpy, &ev);
             dispatch(&ev);
-            XFlush(sc.dpy);
-            continue;
+            processed++;
         }
+
+        XFlush(sc.dpy);
 
         pfds[0].fd = ConnectionNumber(sc.dpy);
         pfds[0].events = POLLIN;
         pfds[0].revents = 0;
-        wfd = scde_security_watch_fd(); /* inotify, ALWAYS_ON only */
+
+        wfd = scde_security_watch_fd();
         if (wfd >= 0) {
             pfds[1].fd = wfd;
             pfds[1].events = POLLIN;
@@ -408,7 +423,8 @@ static void event_loop(void)
             np = 2;
         }
 
-        timeout = panel_timeout_ms();
+        /* If the X queue is still busy, poll without blocking. */
+        timeout = (processed == X_EVENT_BATCH || scde_security_pending()) ? 0 : panel_timeout_ms();
         rc = poll(pfds, (nfds_t)np, timeout);
 
         if (rc < 0) {
@@ -417,14 +433,32 @@ static void event_loop(void)
             log_msg("poll failed: %s", strerror(errno));
             break;
         }
-        if (np == 2 && (pfds[1].revents & POLLIN)) {
-            scde_security_pump();
-            /* bait sweep rides the same wakeup: no extra daemon, no
-             * polling loop - detection stays event-driven and bounded */
-            if (scde_bait_enabled())
-                scde_bait_check();
-            security_gui_redraw();      /* live security log */
+
+        if (pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            log_msg("X11 connection poll error: 0x%x",
+                    (unsigned int)pfds[0].revents);
+            break;
         }
+
+        if (np == 2) {
+            short errors = POLLERR | POLLHUP | POLLNVAL;
+
+            if (pfds[1].revents & errors) {
+                log_msg("security watcher poll error: 0x%x",
+                        (unsigned int)pfds[1].revents);
+                break;
+            }
+
+            if (pfds[1].revents & POLLIN) {
+                scde_security_pump();
+
+                if (scde_bait_enabled())
+                    scde_bait_check();
+
+                security_gui_redraw();
+            }
+        }
+
         panel_tick();
     }
 }
@@ -505,7 +539,6 @@ static void cleanup(void)
     sc.dpy = NULL;
 
     if (sc.lock_fd >= 0) {
-        unlink(sc.lock_path);
         close(sc.lock_fd);
         sc.lock_fd = -1;
     }
@@ -611,7 +644,6 @@ int main(int argc, char **argv)
     sc.dpy = XOpenDisplay(NULL);
     if (!sc.dpy) {
         if (sc.lock_fd >= 0) {
-            unlink(sc.lock_path);
             close(sc.lock_fd);
         }
         die("cannot open display '%s'",

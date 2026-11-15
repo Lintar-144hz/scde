@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 700
 /*
  * SCDE plugin manager - discover -> load -> validate -> init -> running ->
  * shutdown -> unload, with failures isolated to the plugin that caused them.

@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 700
 /*
  * SCDE Security Layer - core: lifecycle, path validation, trust state,
  * statistics and the plugin gate.
@@ -591,6 +592,13 @@ int scde_security_pump(void)
     if (!inited || scde_security_get_scan_mode() != SCDE_SCAN_ALWAYS_ON)
         return SCDE_ERR_STATE;
     return scde__scanner_pump();
+}
+
+int scde_security_pending(void)
+{
+    if (!inited || scde_security_get_scan_mode() != SCDE_SCAN_ALWAYS_ON)
+        return 0;
+    return scde__scanner_pending();
 }
 
 /* ---------------------------------------------------------------- stats -- */

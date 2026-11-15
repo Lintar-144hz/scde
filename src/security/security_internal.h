@@ -24,5 +24,6 @@ int scde__scanner_watch_dir(const char *dir);
 void scde__scanner_watch_stop(void);
 int scde__scanner_watch_fd(void);
 int scde__scanner_pump(void);
+int scde__scanner_pending(void);
 
 #endif /* SCDE_SECURITY_INTERNAL_H */

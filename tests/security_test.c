@@ -356,12 +356,12 @@ static int fn_restrict(void)
         return 1;
     if (nnp_status() != 1)
         rc |= 2;
-#ifdef RLIMIT_AS
+#ifdef RLIMIT_DATA
     {
         struct rlimit rl;
 
-        /* the 3 GiB ceiling must actually be in place on this path */
-        if (getrlimit(RLIMIT_AS, &rl) != 0)
+        /* the 3 GiB data ceiling must actually be in place on this path */
+        if (getrlimit(RLIMIT_DATA, &rl) != 0)
             rc |= 32;
         else if (rl.rlim_cur == 0 ||
                  rl.rlim_cur > (rlim_t)(3072UL * 1024UL * 1024UL))
@@ -642,8 +642,8 @@ static int fn_limits_child(void)
     if (rl.rlim_cur == 0 || rl.rlim_cur > 4096)
         return 5;
     /* RAM: the 3 GiB sandbox ceiling must actually be in place */
-#ifdef RLIMIT_AS
-    if (getrlimit(RLIMIT_AS, &rl) != 0)
+#ifdef RLIMIT_DATA
+    if (getrlimit(RLIMIT_DATA, &rl) != 0)
         return 6;
     if (rl.rlim_cur == 0 ||
         rl.rlim_cur > (rlim_t)(3072UL * 1024UL * 1024UL))

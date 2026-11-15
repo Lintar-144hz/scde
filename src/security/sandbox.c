@@ -724,16 +724,32 @@ static int apply_rlimits(int full)
 
     /* Resource ceiling - shared with the resource module (one source of
      * truth: scde_resource_defaults/set, wired to sandbox_memory_mb).
-     * Scope: per sandboxed process (RLIMIT_AS address space), enforced by
-     * the kernel in the child before exec.  Cap only: an existing stricter
-     * hard limit is kept, never raised.  A failure here fails the sandbox
-     * closed - we never claim a ceiling we did not apply.
+     * Scope: per sandboxed process (RLIMIT_DATA), enforced by the kernel in
+     * the child before exec.  RLIMIT_DATA tracks committed data/anon
+     * mappings; RLIMIT_AS would also count the enormous PROT_NONE address
+     * reservations browsers make and prevent them starting at all.  Cap
+     * only: an existing stricter hard limit is kept, never raised.  A
+     * failure here fails the sandbox closed - we never claim a ceiling we
+     * did not apply.
      *
      * No CPU quota: SCDE deliberately imposes none.  Sandboxed
      * applications use whatever CPU the host scheduler gives them. */
     scde_resource_get(&res);
     if (res.ram_bytes > 0) {
         rlim_t cap = (rlim_t)res.ram_bytes;
+#ifdef RLIMIT_DATA
+        struct rlimit data;
+
+        if (cap > (rlim_t)SCDE_SANDBOX_RAM_CAP_BYTES)
+            cap = (rlim_t)SCDE_SANDBOX_RAM_CAP_BYTES;
+        if (getrlimit(RLIMIT_DATA, &data) != 0)
+            return -1;
+        if (data.rlim_max == RLIM_INFINITY || data.rlim_max > cap)
+            data.rlim_max = cap;
+        data.rlim_cur = data.rlim_max;
+        if (setrlimit(RLIMIT_DATA, &data) != 0)
+            return -1;
+#elif defined(RLIMIT_AS)
         struct rlimit as;
 
         if (cap > (rlim_t)SCDE_SANDBOX_RAM_CAP_BYTES)
@@ -745,6 +761,9 @@ static int apply_rlimits(int full)
         as.rlim_cur = as.rlim_max;
         if (setrlimit(RLIMIT_AS, &as) != 0)
             return -1;
+#else
+        return -1;
+#endif
     } else {
         return -1;                    /* no ceiling configured: fail closed */
     }

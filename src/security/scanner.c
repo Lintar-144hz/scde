@@ -1634,9 +1634,16 @@ int scde__scanner_watch_dir(const char *dir)
     return SCDE_OK;
 }
 
+/* Forward declarations for watcher shutdown. */
+static size_t scanner_event_len;
+static size_t scanner_event_off;
+
 void scde__scanner_watch_stop(void)
 {
     int i;
+
+    scanner_event_len = 0;
+    scanner_event_off = 0;
 
     for (i = 0; i < n_watch; i++) {
         if (ifd >= 0)
@@ -1699,38 +1706,108 @@ static void handle_watch(const char *dir, const char *name, uint32_t mask)
     }
 }
 
+/*
+ * One read is retained until every record has been processed.
+ * The event loop asks pending() to avoid sleeping while records remain.
+ */
+#define SCANNER_EVENT_BUFFER 4096u
+#define SCANNER_EVENT_BATCH  16
+
+static _Alignas(struct inotify_event)
+    unsigned char scanner_event_buffer[SCANNER_EVENT_BUFFER];
+static size_t scanner_event_len;
+static size_t scanner_event_off;
+
+int scde__scanner_pending(void)
+{
+    return ifd >= 0 && scanner_event_off < scanner_event_len;
+}
+
 int scde__scanner_pump(void)
 {
-    _Alignas(struct inotify_event) static char evbuf[4096];
     int processed = 0;
 
     if (ifd < 0)
         return SCDE_ERR_STATE;
 
-    for (;;) {
-        ssize_t n = read(ifd, evbuf, sizeof(evbuf));
-        size_t off = 0;
+    /* Read only when the previous batch has been fully consumed. */
+    if (scanner_event_off >= scanner_event_len) {
+        ssize_t n;
 
-        if (n <= 0) {
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-                break;
-            if (n < 0 && errno == EINTR)
-                continue;
+        scanner_event_len = 0;
+        scanner_event_off = 0;
+
+        do {
+            n = read(ifd, scanner_event_buffer,
+                     sizeof(scanner_event_buffer));
+        } while (n < 0 && errno == EINTR);
+
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return 0;
+            scde_log(SCDE_LOG_WARN, "security: inotify read failed");
+            return SCDE_ERR_IO;
+        }
+        if (n == 0)
+            return 0;
+
+        scanner_event_len = (size_t)n;
+    }
+
+    while (scanner_event_off < scanner_event_len &&
+           processed < SCANNER_EVENT_BATCH) {
+        size_t remaining = scanner_event_len - scanner_event_off;
+        const struct inotify_event *ev;
+        size_t record_len;
+        const char *dir;
+
+        if (remaining < sizeof(struct inotify_event)) {
+            scde_log(SCDE_LOG_WARN,
+                     "security: malformed inotify record header");
+            scanner_event_len = 0;
+            scanner_event_off = 0;
             break;
         }
-        while (off + sizeof(struct inotify_event) <= (size_t)n &&
-               processed < 16) {
-            const struct inotify_event *ev =
-                (const struct inotify_event *)(const void *)(evbuf + off);
-            const char *dir = dir_for_wd(ev->wd);
 
-            if (dir && ev->len > 0)
-                handle_watch(dir, ev->name, ev->mask);
-            scde__stats()->watch_events++;
-            processed++;
-            off += sizeof(struct inotify_event) + ev->len;
+        ev = (const struct inotify_event *)(const void *)
+             (scanner_event_buffer + scanner_event_off);
+
+        if ((size_t)ev->len > remaining - sizeof(*ev)) {
+            scde_log(SCDE_LOG_WARN,
+                     "security: malformed inotify record length");
+            scanner_event_len = 0;
+            scanner_event_off = 0;
+            break;
         }
-        break;                      /* bounded: one read per pump */
+
+        record_len = sizeof(*ev) + (size_t)ev->len;
+
+        if (ev->mask & IN_Q_OVERFLOW) {
+            /*
+             * Kernel dropped events. Invalidate cached scan results so
+             * later observations cannot reuse potentially stale entries.
+             * Full directory reconciliation is intentionally separate.
+             */
+            memset(cache, 0, sizeof(cache));
+            cache_next = 0;
+            scde_log(SCDE_LOG_WARN,
+                     "security: inotify queue overflow; scan cache invalidated");
+        } else if (ev->len > 0 &&
+                   memchr(ev->name, '\0', ev->len) != NULL) {
+            dir = dir_for_wd(ev->wd);
+            if (dir)
+                handle_watch(dir, ev->name, ev->mask);
+        }
+
+        scde__stats()->watch_events++;
+        processed++;
+        scanner_event_off += record_len;
     }
+
+    if (scanner_event_off >= scanner_event_len) {
+        scanner_event_len = 0;
+        scanner_event_off = 0;
+    }
+
     return processed;
 }

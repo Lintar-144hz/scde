@@ -594,6 +594,10 @@ void manage(Window w)
         return;
     if (wa.override_redirect)
         return;
+    if (wa.width <= 1 && wa.height <= 1) {
+        XMapWindow(sc.dpy, w);
+        return;
+    }
 
     c = calloc(1, sizeof(Client));
     if (!c)

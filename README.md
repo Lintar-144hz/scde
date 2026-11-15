@@ -100,7 +100,7 @@ Only `libX11` and libc are required at run time.
    bounded scans (plugins / Desktop / Home), permission toggles and a
    scrollable security log.
 * **Sandbox resource limits** — every sandboxed process gets a 3 GiB RAM
-  ceiling (3072 MiB, `RLIMIT_AS` applied in the child before exec, capped
+  ceiling (3072 MiB, `RLIMIT_DATA` applied in the child before exec, capped
   and never raised; configurable down via `sandbox_memory_mb`), while SCDE
   imposes no CPU quota of its own — the host scheduler decides.
 * **Built-in file manager** — `Alt+E`, Finder-inspired: compact toolbar
